@@ -11,6 +11,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
+import { Preloader } from "@/components/preloader"
+import { LazyImage } from "@/components/lazy-image"
 import {
   Play,
   Pause,
@@ -131,6 +133,13 @@ export default function IPTVPlayer() {
   const [isThemeTransitioning, setIsThemeTransitioning] = useState(false)
   const [showParticles, setShowParticles] = useState(false)
 
+  // Logo animation state
+  const [isLogoHovered, setIsLogoHovered] = useState(false)
+
+  // App loading state
+  const [isAppLoading, setIsAppLoading] = useState(true)
+  const [isInitialized, setIsInitialized] = useState(false)
+
   // Particle animation configuration
   const particleConfig = {
     count: isDarkMode ? 25 : 20, // More particles for dark mode
@@ -159,25 +168,67 @@ export default function IPTVPlayer() {
     }, 100)
   }
 
-  // Load theme preference from localStorage
+  // Initialize app
   useEffect(() => {
-    const savedTheme = localStorage.getItem("iptv-theme")
-    if (savedTheme === "dark") {
-      setIsDarkMode(true)
-    } else {
-      setIsDarkMode(false) // Default to light theme
+    const initializeApp = async () => {
+      try {
+        // Load theme preference
+        const savedTheme = localStorage.getItem("iptv-theme")
+        if (savedTheme === "dark") {
+          setIsDarkMode(true)
+        } else {
+          setIsDarkMode(false)
+        }
+
+        // Load saved playlists
+        const savedPlaylists = localStorage.getItem("iptv-playlists")
+        if (savedPlaylists) {
+          setPlaylists(JSON.parse(savedPlaylists))
+        }
+
+        // Load saved recordings
+        const savedRecordings = localStorage.getItem("iptv-recordings")
+        if (savedRecordings) {
+          const parsedRecordings = JSON.parse(savedRecordings).map((r: any) => ({
+            ...r,
+            startTime: new Date(r.startTime),
+            endTime: new Date(r.endTime),
+          }))
+          setRecordings(parsedRecordings)
+        }
+
+        // Simulate initialization delay
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+
+        setIsInitialized(true)
+
+        // Load default playlist if none exist
+        const hasLoadedDefault = localStorage.getItem("iptv-default-loaded")
+        if (!hasLoadedDefault && (!savedPlaylists || JSON.parse(savedPlaylists).length === 0)) {
+          await loadDefaultPlaylist()
+          localStorage.setItem("iptv-default-loaded", "true")
+        }
+      } catch (error) {
+        console.error("Error initializing app:", error)
+      } finally {
+        setIsAppLoading(false)
+      }
     }
+
+    initializeApp()
   }, [])
 
   // Save theme preference and apply to document
   useEffect(() => {
-    localStorage.setItem("iptv-theme", isDarkMode ? "dark" : "light")
-    if (isDarkMode) {
-      document.documentElement.classList.add("dark")
-    } else {
-      document.documentElement.classList.remove("dark")
+    if (isInitialized) {
+      localStorage.setItem("iptv-theme", isDarkMode ? "dark" : "light")
+      if (isDarkMode) {
+        document.documentElement.classList.add("dark")
+      } else {
+        document.documentElement.classList.remove("dark")
+      }
     }
-  }, [isDarkMode])
+  }, [isDarkMode, isInitialized])
 
   // Theme-aware classes with animations
   const themeClasses = {
@@ -202,18 +253,12 @@ export default function IPTVPlayer() {
     overlay: `${isDarkMode ? "bg-black/80" : "bg-white/90"} transition-all duration-300 ease-in-out`,
   }
 
-  // Load playlists from localStorage on mount
-  useEffect(() => {
-    const savedPlaylists = localStorage.getItem("iptv-playlists")
-    if (savedPlaylists) {
-      setPlaylists(JSON.parse(savedPlaylists))
-    }
-  }, [])
-
   // Save playlists to localStorage whenever playlists change
   useEffect(() => {
-    localStorage.setItem("iptv-playlists", JSON.stringify(playlists))
-  }, [playlists])
+    if (isInitialized) {
+      localStorage.setItem("iptv-playlists", JSON.stringify(playlists))
+    }
+  }, [playlists, isInitialized])
 
   // Parse M3U content
   const parseM3U = (content: string, onProgress?: (progress: number) => void): Channel[] => {
@@ -495,24 +540,13 @@ export default function IPTVPlayer() {
     }
   }
 
-  // Load recordings from localStorage
-  useEffect(() => {
-    const savedRecordings = localStorage.getItem("iptv-recordings")
-    if (savedRecordings) {
-      const parsedRecordings = JSON.parse(savedRecordings).map((r: any) => ({
-        ...r,
-        startTime: new Date(r.startTime),
-        endTime: new Date(r.endTime),
-      }))
-      setRecordings(parsedRecordings)
-    }
-  }, [])
-
   // Save recordings to localStorage
   useEffect(() => {
-    localStorage.setItem("iptv-recordings", JSON.stringify(recordings))
-    checkRecordingConflicts()
-  }, [recordings])
+    if (isInitialized) {
+      localStorage.setItem("iptv-recordings", JSON.stringify(recordings))
+      checkRecordingConflicts()
+    }
+  }, [recordings, isInitialized])
 
   // Check for recording conflicts
   const checkRecordingConflicts = () => {
@@ -615,6 +649,8 @@ export default function IPTVPlayer() {
 
   // Simulate recording process (in a real app, this would handle actual recording)
   useEffect(() => {
+    if (!isInitialized) return
+
     const interval = setInterval(() => {
       const now = new Date()
 
@@ -641,7 +677,7 @@ export default function IPTVPlayer() {
     }, 10000) // Check every 10 seconds
 
     return () => clearInterval(interval)
-  }, [])
+  }, [isInitialized])
 
   // Load default IPTV-org playlist
   const loadDefaultPlaylist = async () => {
@@ -677,15 +713,6 @@ export default function IPTVPlayer() {
       setLoadingProgress(0)
     }
   }
-
-  // Load default playlist on first app load
-  useEffect(() => {
-    const hasLoadedDefault = localStorage.getItem("iptv-default-loaded")
-    if (!hasLoadedDefault && playlists.length === 0) {
-      loadDefaultPlaylist()
-      localStorage.setItem("iptv-default-loaded", "true")
-    }
-  }, [playlists.length])
 
   // Get channel count by category
   const getChannelCountByCategory = (category: string) => {
@@ -776,6 +803,11 @@ export default function IPTVPlayer() {
     )
   }
 
+  // Show preloader while app is loading
+  if (isAppLoading) {
+    return <Preloader isLoading={isAppLoading} />
+  }
+
   return (
     <div className={`min-h-screen ${themeClasses.background} ${themeClasses.text} transition-colors duration-200`}>
       <ParticleSystem />
@@ -785,9 +817,58 @@ export default function IPTVPlayer() {
           {/* Header */}
           <div className={`p-4 border-b ${themeClasses.sidebarBorder}`}>
             <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Tv className="w-6 h-6 text-blue-500" />
-                <h1 className="text-xl font-bold">IPTV Player</h1>
+              <div
+                className="flex items-center gap-2 cursor-pointer group"
+                onMouseEnter={() => setIsLogoHovered(true)}
+                onMouseLeave={() => setIsLogoHovered(false)}
+              >
+                <div className="relative">
+                  <Tv
+                    className={`w-6 h-6 text-blue-500 transition-all duration-500 ease-in-out transform ${
+                      isLogoHovered ? "scale-110 rotate-12 drop-shadow-lg" : "scale-100 rotate-0"
+                    }`}
+                  />
+                  {/* Animated glow effect */}
+                  <div
+                    className={`absolute inset-0 w-6 h-6 bg-blue-500 rounded-full blur-md transition-all duration-500 ease-in-out ${
+                      isLogoHovered ? "opacity-30 scale-150" : "opacity-0 scale-100"
+                    }`}
+                  />
+                  {/* Pulse rings */}
+                  <div
+                    className={`absolute inset-0 w-6 h-6 border-2 border-blue-500 rounded-full transition-all duration-700 ease-out ${
+                      isLogoHovered ? "scale-200 opacity-0" : "scale-100 opacity-0"
+                    }`}
+                  />
+                  <div
+                    className={`absolute inset-0 w-6 h-6 border border-blue-400 rounded-full transition-all duration-500 ease-out delay-100 ${
+                      isLogoHovered ? "scale-150 opacity-0" : "scale-100 opacity-0"
+                    }`}
+                  />
+                </div>
+                <h1
+                  className={`text-xl font-bold transition-all duration-300 ease-in-out ${
+                    isLogoHovered ? "text-blue-500 scale-105 tracking-wide" : "scale-100 tracking-normal"
+                  }`}
+                >
+                  <span className="relative">
+                    Fr33 TV
+                    {/* Animated underline */}
+                    <div
+                      className={`absolute bottom-0 left-0 h-0.5 bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300 ease-in-out ${
+                        isLogoHovered ? "w-full opacity-100" : "w-0 opacity-0"
+                      }`}
+                    />
+                    {/* Sparkle effects */}
+                    {isLogoHovered && (
+                      <>
+                        <div className="absolute -top-1 -right-1 w-1 h-1 bg-blue-400 rounded-full animate-ping" />
+                        <div className="absolute -bottom-1 left-2 w-1 h-1 bg-purple-400 rounded-full animate-ping delay-150" />
+                        <div className="absolute top-1 left-8 w-0.5 h-0.5 bg-blue-300 rounded-full animate-ping delay-300" />
+                      </>
+                    )}
+                  </span>
+                </h1>
               </div>
               <Button
                 variant="ghost"
@@ -1175,13 +1256,12 @@ export default function IPTVPlayer() {
                           >
                             <div className="flex items-center gap-2">
                               {channel.logo && (
-                                <img
-                                  src={channel.logo || "/placeholder.svg"}
+                                <LazyImage
+                                  src={channel.logo}
                                   alt={channel.name}
-                                  className="w-8 h-8 rounded object-cover"
-                                  onError={(e) => {
-                                    e.currentTarget.style.display = "none"
-                                  }}
+                                  className="w-8 h-8 rounded object-cover flex-shrink-0"
+                                  width={32}
+                                  height={32}
                                 />
                               )}
                               <div className="flex-1 min-w-0">
@@ -1190,13 +1270,13 @@ export default function IPTVPlayer() {
                                   <div className={`text-xs ${themeClasses.muted} truncate`}>{channel.group}</div>
                                 )}
                                 {currentProgram && (
-                                  <div className={`text-xs ${themeClasses.success} truncate`}>
+                                  <div className={`text-xs ${themeClasses.accent} truncate`}>
                                     Now: {currentProgram.title}
                                   </div>
                                 )}
                                 {nextProgram && (
-                                  <div className={`text-xs ${themeClasses.accent} truncate`}>
-                                    Next: {formatEPGTime(nextProgram.start)} - {nextProgram.title}
+                                  <div className={`text-xs ${themeClasses.muted} truncate`}>
+                                    Next: {nextProgram.title} at {formatEPGTime(nextProgram.start)}
                                   </div>
                                 )}
                               </div>
@@ -1215,72 +1295,88 @@ export default function IPTVPlayer() {
         {/* Main Content */}
         <div className="flex-1 flex flex-col">
           {/* Video Player */}
-          <div className="flex-1 bg-black relative">
+          <div className={`flex-1 ${themeClasses.card} m-4 rounded-lg shadow-lg overflow-hidden`}>
             {selectedChannel ? (
-              <div className="w-full h-full relative">
+              <div className="relative h-full">
                 <video
                   ref={videoRef}
-                  className="w-full h-full object-contain"
+                  className="w-full h-full object-contain bg-black"
                   onPlay={() => setIsPlaying(true)}
                   onPause={() => setIsPlaying(false)}
-                  onLoadStart={() => setIsPlaying(false)}
+                  onVolumeChange={(e) => {
+                    const video = e.target as HTMLVideoElement
+                    setVolume(video.volume)
+                    setIsMuted(video.muted)
+                  }}
                   crossOrigin="anonymous"
                 />
 
-                {/* Video Controls Overlay */}
+                {/* Video Controls */}
                 <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
-                  <div className="flex items-center gap-4">
-                    <Button variant="ghost" size="sm" onClick={togglePlay} className="text-white hover:bg-white/20">
-                      {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-                    </Button>
-
-                    <div className="flex items-center gap-2">
-                      <Button variant="ghost" size="sm" onClick={toggleMute} className="text-white hover:bg-white/20">
-                        {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                  <div className="flex items-center justify-between text-white">
+                    <div className="flex items-center gap-4">
+                      <Button variant="ghost" size="sm" onClick={togglePlay} className="text-white hover:bg-white/20">
+                        {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
                       </Button>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.1"
-                        value={volume}
-                        onChange={handleVolumeChange}
-                        className="w-20"
-                      />
+
+                      <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="sm" onClick={toggleMute} className="text-white hover:bg-white/20">
+                          {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+                        </Button>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.1"
+                          value={volume}
+                          onChange={handleVolumeChange}
+                          className="w-20"
+                        />
+                      </div>
                     </div>
 
-                    <div className="flex-1" />
-
-                    <div className="text-white text-sm">{selectedChannel.name}</div>
-
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={toggleFullscreen}
-                      className="text-white hover:bg-white/20"
-                    >
-                      <Maximize className="w-4 h-4" />
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm">
+                        <div className="font-medium">{selectedChannel.name}</div>
+                        {getCurrentProgram(selectedChannel.name) && (
+                          <div className="text-xs opacity-80">
+                            Now: {getCurrentProgram(selectedChannel.name)?.title}
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={toggleFullscreen}
+                        className="text-white hover:bg-white/20"
+                      >
+                        <Maximize className="w-5 h-5" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                <div className={`text-center ${themeClasses.muted}`}>
-                  <Tv className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                  <h2 className="text-xl font-semibold mb-2">No Channel Selected</h2>
-                  <p>Add a playlist and select a channel to start watching</p>
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center">
+                  <Tv className={`w-16 h-16 ${themeClasses.muted} mx-auto mb-4`} />
+                  <h3 className={`text-lg font-medium ${themeClasses.muted} mb-2`}>No Channel Selected</h3>
+                  <p className={`${themeClasses.muted} text-sm`}>
+                    {playlists.length === 0
+                      ? "Add a playlist to get started"
+                      : "Select a channel from the sidebar to start watching"}
+                  </p>
                 </div>
               </div>
             )}
           </div>
 
           {/* EPG Grid */}
-          {showEPG && (
-            <div className={`${themeClasses.card} border-t ${themeClasses.cardBorder} h-80 flex flex-col shadow-lg`}>
-              <div className={`p-4 border-b ${themeClasses.cardBorder}`}>
+          {showEPG && epgData.programs.length > 0 && (
+            <div className={`${themeClasses.card} m-4 mt-0 rounded-lg shadow-lg`}>
+              <div className="p-4 border-b border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between">
-                  <h3 className="font-semibold">Electronic Program Guide</h3>
+                  <h3 className="text-lg font-semibold">Electronic Program Guide</h3>
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
@@ -1291,9 +1387,11 @@ export default function IPTVPlayer() {
                         setEpgDate(newDate)
                       }}
                     >
-                      ←
+                      Previous Day
                     </Button>
-                    <span className="text-sm px-3">{epgDate.toLocaleDateString()}</span>
+                    <span className="text-sm font-medium px-3">
+                      {epgDate.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}
+                    </span>
                     <Button
                       variant="outline"
                       size="sm"
@@ -1303,72 +1401,99 @@ export default function IPTVPlayer() {
                         setEpgDate(newDate)
                       }}
                     >
-                      →
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setEpgDate(new Date())}>
-                      Today
+                      Next Day
                     </Button>
                   </div>
                 </div>
               </div>
 
-              <ScrollArea className="flex-1">
+              <ScrollArea className="h-96">
                 <div className="p-4">
-                  {selectedPlaylist &&
-                    (() => {
-                      const playlist = playlists.find((p) => p.id === selectedPlaylist)
-                      const dayPrograms = getEPGPrograms(epgDate)
+                  {getEPGPrograms(epgDate).length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      <div className="text-sm">No EPG data available for this date</div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {epgData.channels.map((channel) => {
+                        const channelPrograms = getEPGPrograms(epgDate).filter(
+                          (program) => program.channelId === channel.id,
+                        )
 
-                      return (
-                        <div className="space-y-4">
-                          {playlist?.channels.slice(0, 10).map((channel, channelIndex) => {
-                            const channelPrograms = dayPrograms
-                              .filter((program) => {
-                                const epgChannel = epgData.channels.find(
-                                  (ch) =>
-                                    ch.displayName.toLowerCase().includes(channel.name.toLowerCase()) ||
-                                    channel.name.toLowerCase().includes(ch.displayName.toLowerCase()),
-                                )
-                                return epgChannel && program.channelId === epgChannel.id
-                              })
-                              .sort((a, b) => a.start.getTime() - b.start.getTime())
+                        if (channelPrograms.length === 0) return null
 
-                            return (
-                              <div key={channelIndex} className={`border ${themeClasses.cardBorder} rounded`}>
-                                <div className={`${themeClasses.button} p-2 font-medium text-sm`}>{channel.name}</div>
-                                <div className="p-2">
-                                  {channelPrograms.length > 0 ? (
-                                    <div className="space-y-1">
-                                      {channelPrograms.slice(0, 6).map((program) => (
-                                        <div
-                                          key={program.id}
-                                          className={`flex items-center justify-between p-2 ${themeClasses.button} rounded cursor-pointer ${themeClasses.hover}`}
-                                          onClick={() => setSelectedProgram(program)}
-                                        >
-                                          <div className="flex-1 min-w-0">
-                                            <div className="text-sm font-medium truncate">{program.title}</div>
-                                            {program.category && (
-                                              <div className={`text-xs ${themeClasses.muted}`}>{program.category}</div>
-                                            )}
-                                          </div>
-                                          <div className={`text-xs ${themeClasses.muted} ml-2`}>
-                                            {formatEPGTime(program.start)} - {formatEPGTime(program.end)}
-                                          </div>
+                        return (
+                          <div key={channel.id} className="border rounded-lg p-3">
+                            <div className="flex items-center gap-2 mb-3">
+                              {channel.icon && (
+                                <LazyImage
+                                  src={channel.icon}
+                                  alt={channel.displayName}
+                                  className="w-6 h-6 rounded object-cover"
+                                  width={24}
+                                  height={24}
+                                />
+                              )}
+                              <h4 className="font-medium">{channel.displayName}</h4>
+                            </div>
+                            <div className="grid gap-2">
+                              {channelPrograms
+                                .sort((a, b) => a.start.getTime() - b.start.getTime())
+                                .map((program) => {
+                                  const isScheduled = isProgramScheduled(program.id)
+                                  const recordingStatus = getRecordingStatus(program.id)
+
+                                  return (
+                                    <div
+                                      key={program.id}
+                                      className={`flex items-center justify-between p-2 rounded cursor-pointer transition-colors ${
+                                        isScheduled
+                                          ? "bg-red-100 dark:bg-red-900/20 border border-red-200 dark:border-red-800"
+                                          : "hover:bg-gray-100 dark:hover:bg-gray-800"
+                                      }`}
+                                      onClick={() => setSelectedProgram(program)}
+                                    >
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-sm font-medium">{program.title}</span>
+                                          {program.category && (
+                                            <Badge variant="secondary" className="text-xs">
+                                              {program.category}
+                                            </Badge>
+                                          )}
+                                          {recordingStatus && (
+                                            <Badge
+                                              variant={
+                                                recordingStatus === "recording"
+                                                  ? "destructive"
+                                                  : recordingStatus === "completed"
+                                                    ? "default"
+                                                    : "secondary"
+                                              }
+                                              className="text-xs"
+                                            >
+                                              {recordingStatus}
+                                            </Badge>
+                                          )}
                                         </div>
-                                      ))}
+                                        <div className="text-xs text-gray-500">
+                                          {formatEPGTime(program.start)} - {formatEPGTime(program.end)}
+                                        </div>
+                                        {program.description && (
+                                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1 line-clamp-2">
+                                            {program.description}
+                                          </div>
+                                        )}
+                                      </div>
                                     </div>
-                                  ) : (
-                                    <div className={`text-sm ${themeClasses.muted} italic`}>
-                                      No program data available
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )
-                    })()}
+                                  )
+                                })}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               </ScrollArea>
             </div>
@@ -1376,425 +1501,207 @@ export default function IPTVPlayer() {
 
           {/* Recordings Panel */}
           {showRecordings && (
-            <div className={`${themeClasses.card} border-t ${themeClasses.cardBorder} h-80 flex flex-col shadow-lg`}>
-              <div className={`p-4 border-b ${themeClasses.cardBorder}`}>
+            <div className={`${themeClasses.card} m-4 mt-0 rounded-lg shadow-lg`}>
+              <div className="p-4 border-b border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between">
-                  <h3 className="font-semibold">Recordings Manager</h3>
+                  <h3 className="text-lg font-semibold">Recordings</h3>
                   <div className="flex items-center gap-2">
-                    {recordingConflicts.length > 0 && (
-                      <Badge variant="destructive" className="text-xs">
-                        {recordingConflicts.length} Conflicts
-                      </Badge>
-                    )}
-                    <Badge variant="secondary" className="text-xs">
+                    <Badge variant="secondary">
                       {recordings.filter((r) => r.status === "scheduled").length} Scheduled
                     </Badge>
-                    <Badge variant="secondary" className="text-xs">
+                    <Badge variant="destructive">
                       {recordings.filter((r) => r.status === "recording").length} Recording
+                    </Badge>
+                    <Badge variant="default">
+                      {recordings.filter((r) => r.status === "completed").length} Completed
                     </Badge>
                   </div>
                 </div>
               </div>
 
-              <ScrollArea className="flex-1">
+              <ScrollArea className="h-96">
                 <div className="p-4">
-                  {/* Recording Conflicts */}
                   {recordingConflicts.length > 0 && (
-                    <div className="mb-6">
-                      <h4 className={`text-sm font-medium ${themeClasses.error} mb-2`}>Recording Conflicts</h4>
-                      <div className="space-y-2">
-                        {recordingConflicts.map((conflict, index) => (
+                    <div className="mb-4 p-3 bg-yellow-100 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                      <h4 className="font-medium text-yellow-800 dark:text-yellow-200 mb-2">
+                        Recording Conflicts ({recordingConflicts.length})
+                      </h4>
+                      {recordingConflicts.map((conflict, index) => (
+                        <div key={index} className="text-sm text-yellow-700 dark:text-yellow-300">
+                          "{conflict.recording1.title}" conflicts with "{conflict.recording2.title}" from{" "}
+                          {formatEPGTime(conflict.overlapStart)} to {formatEPGTime(conflict.overlapEnd)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {recordings.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      <div className="text-sm">No recordings scheduled</div>
+                      <div className="text-xs">Schedule recordings from the EPG</div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {recordings
+                        .filter((r) => r.status !== "cancelled")
+                        .sort((a, b) => b.startTime.getTime() - a.startTime.getTime())
+                        .map((recording) => (
                           <div
-                            key={index}
-                            className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-600 rounded p-3"
+                            key={recording.id}
+                            className={`p-3 rounded-lg border transition-colors ${
+                              recording.status === "recording"
+                                ? "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800"
+                                : recording.status === "completed"
+                                  ? "bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-800"
+                                  : "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700"
+                            }`}
                           >
-                            <div className={`text-sm font-medium ${themeClasses.error} mb-1`}>Conflict Detected</div>
-                            <div className={`text-xs ${themeClasses.error} space-y-1 opacity-80`}>
-                              <div>
-                                • {conflict.recording1.title} ({conflict.recording1.channelName})
+                            <div className="flex items-center justify-between">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="font-medium">{recording.title}</span>
+                                  <Badge
+                                    variant={
+                                      recording.status === "recording"
+                                        ? "destructive"
+                                        : recording.status === "completed"
+                                          ? "default"
+                                          : "secondary"
+                                    }
+                                    className="text-xs"
+                                  >
+                                    {recording.status}
+                                  </Badge>
+                                  {recording.category && (
+                                    <Badge variant="outline" className="text-xs">
+                                      {recording.category}
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="text-sm text-gray-600 dark:text-gray-400">{recording.channelName}</div>
+                                <div className="text-xs text-gray-500">
+                                  {recording.startTime.toLocaleDateString()} {formatEPGTime(recording.startTime)} -{" "}
+                                  {formatEPGTime(recording.endTime)}
+                                </div>
+                                {recording.description && (
+                                  <div className="text-xs text-gray-600 dark:text-gray-400 mt-1 line-clamp-2">
+                                    {recording.description}
+                                  </div>
+                                )}
+                                {recording.status === "completed" && recording.fileSize && (
+                                  <div className="text-xs text-gray-500 mt-1">
+                                    File size: {formatFileSize(recording.fileSize)}
+                                  </div>
+                                )}
                               </div>
-                              <div>
-                                • {conflict.recording2.title} ({conflict.recording2.channelName})
-                              </div>
-                              <div className={themeClasses.error}>
-                                Overlap: {formatEPGTime(conflict.overlapStart)} - {formatEPGTime(conflict.overlapEnd)}
+                              <div className="flex items-center gap-2">
+                                {recording.status === "scheduled" && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => cancelRecording(recording.id)}
+                                    className="text-xs"
+                                  >
+                                    Cancel
+                                  </Button>
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => deleteRecording(recording.id)}
+                                  className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
                               </div>
                             </div>
                           </div>
                         ))}
-                      </div>
                     </div>
                   )}
 
                   {/* Upcoming Recordings */}
                   {getUpcomingRecordings().length > 0 && (
-                    <div className="mb-6">
-                      <h4 className={`text-sm font-medium ${themeClasses.accent} mb-2`}>Upcoming Recordings</h4>
+                    <div className="mt-6">
+                      <h4 className="font-medium mb-3">Upcoming Recordings</h4>
                       <div className="space-y-2">
                         {getUpcomingRecordings().map((recording) => (
                           <div
                             key={recording.id}
-                            className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-600 rounded p-3"
+                            className="flex items-center justify-between p-2 bg-blue-50 dark:bg-blue-900/10 rounded border border-blue-200 dark:border-blue-800"
                           >
-                            <div className="flex items-center justify-between">
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm font-medium truncate">{recording.title}</div>
-                                <div className={`text-xs ${themeClasses.muted}`}>{recording.channelName}</div>
-                                <div className={`text-xs ${themeClasses.accent}`}>
-                                  {formatEPGTime(recording.startTime)} - {formatEPGTime(recording.endTime)}
-                                </div>
+                            <div>
+                              <div className="text-sm font-medium">{recording.title}</div>
+                              <div className="text-xs text-gray-500">
+                                {recording.startTime.toLocaleDateString()} at {formatEPGTime(recording.startTime)}
                               </div>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => cancelRecording(recording.id)}
-                                className={`${themeClasses.error} hover:bg-red-100 dark:hover:bg-red-900/50`}
-                              >
-                                Cancel
-                              </Button>
                             </div>
+                            <Badge variant="secondary" className="text-xs">
+                              {Math.ceil((recording.startTime.getTime() - Date.now()) / (1000 * 60 * 60))}h
+                            </Badge>
                           </div>
                         ))}
                       </div>
                     </div>
                   )}
-
-                  {/* All Recordings */}
-                  <div>
-                    <h4 className={`text-sm font-medium ${themeClasses.muted} mb-2`}>All Recordings</h4>
-                    <div className="space-y-2">
-                      {recordings.length === 0 ? (
-                        <div className={`text-center ${themeClasses.muted} py-8`}>
-                          <div className="text-sm">No recordings scheduled</div>
-                          <div className="text-xs">Schedule recordings from the EPG</div>
-                        </div>
-                      ) : (
-                        recordings
-                          .sort((a, b) => b.startTime.getTime() - a.startTime.getTime())
-                          .map((recording) => (
-                            <div
-                              key={recording.id}
-                              className={`border ${themeClasses.cardBorder} rounded p-3 cursor-pointer ${themeClasses.hover} ${
-                                recording.status === "recording"
-                                  ? "border-red-300 dark:border-red-500 bg-red-50 dark:bg-red-900/20"
-                                  : recording.status === "completed"
-                                    ? "border-green-300 dark:border-green-500 bg-green-50 dark:bg-green-900/20"
-                                    : recording.status === "cancelled"
-                                      ? `border-gray-300 dark:border-gray-500 ${isDarkMode ? "bg-gray-900/20" : "bg-gray-50"}`
-                                      : themeClasses.cardBorder
-                              }`}
-                              onClick={() => setSelectedRecording(recording)}
-                            >
-                              <div className="flex items-center justify-between">
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2">
-                                    <div className="text-sm font-medium truncate">{recording.title}</div>
-                                    <Badge
-                                      variant={
-                                        recording.status === "recording"
-                                          ? "destructive"
-                                          : recording.status === "completed"
-                                            ? "default"
-                                            : "secondary"
-                                      }
-                                      className="text-xs"
-                                    >
-                                      {recording.status}
-                                    </Badge>
-                                  </div>
-                                  <div className={`text-xs ${themeClasses.muted}`}>{recording.channelName}</div>
-                                  <div className={`text-xs ${themeClasses.muted}`}>
-                                    {recording.startTime.toLocaleDateString()} {formatEPGTime(recording.startTime)} -{" "}
-                                    {formatEPGTime(recording.endTime)}
-                                  </div>
-                                  {recording.fileSize && (
-                                    <div className={`text-xs ${themeClasses.muted}`}>
-                                      Size: {formatFileSize(recording.fileSize)}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="flex gap-1">
-                                  {recording.status === "scheduled" && (
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        cancelRecording(recording.id)
-                                      }}
-                                      className={`${themeClasses.error} hover:bg-red-100 dark:hover:bg-red-900/50`}
-                                    >
-                                      Cancel
-                                    </Button>
-                                  )}
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      deleteRecording(recording.id)
-                                    }}
-                                    className={`${themeClasses.muted} hover:bg-gray-100 dark:hover:bg-gray-700`}
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-                          ))
-                      )}
-                    </div>
-                  </div>
                 </div>
               </ScrollArea>
-            </div>
-          )}
-
-          {/* Channel Info */}
-          {selectedChannel && (
-            <div className={`${themeClasses.card} border-t ${themeClasses.cardBorder} p-4 shadow-lg`}>
-              <div className="flex items-center gap-4">
-                {selectedChannel.logo && (
-                  <img
-                    src={selectedChannel.logo || "/placeholder.svg"}
-                    alt={selectedChannel.name}
-                    className="w-12 h-12 rounded object-cover"
-                    onError={(e) => {
-                      e.currentTarget.style.display = "none"
-                    }}
-                  />
-                )}
-                <div className="flex-1">
-                  <h3 className="font-semibold">{selectedChannel.name}</h3>
-                  {selectedChannel.group && <p className={`text-sm ${themeClasses.muted}`}>{selectedChannel.group}</p>}
-
-                  {(() => {
-                    const currentProgram = getCurrentProgram(selectedChannel.name)
-                    const nextProgram = getNextProgram(selectedChannel.name)
-
-                    return (
-                      <div className="mt-2 space-y-1">
-                        {currentProgram && (
-                          <div className="text-sm">
-                            <span className={`${themeClasses.success} font-medium`}>Now Playing: </span>
-                            <span>{currentProgram.title}</span>
-                            <span className={`${themeClasses.muted} ml-2`}>
-                              {formatEPGTime(currentProgram.start)} - {formatEPGTime(currentProgram.end)}
-                            </span>
-                          </div>
-                        )}
-                        {nextProgram && (
-                          <div className="text-sm">
-                            <span className={`${themeClasses.accent} font-medium`}>Up Next: </span>
-                            <span>{nextProgram.title}</span>
-                            <span className={`${themeClasses.muted} ml-2`}>{formatEPGTime(nextProgram.start)}</span>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })()}
-                </div>
-              </div>
             </div>
           )}
         </div>
       </div>
 
       {/* Program Details Dialog */}
-      {selectedProgram && (
-        <Dialog open={!!selectedProgram} onOpenChange={() => setSelectedProgram(null)}>
-          <DialogContent className={`${themeClasses.dialog} shadow-xl`}>
-            <DialogHeader>
-              <DialogTitle className="flex items-center justify-between">
-                {selectedProgram.title}
-                {getRecordingStatus(selectedProgram.id) && (
-                  <Badge
-                    variant={getRecordingStatus(selectedProgram.id) === "recording" ? "destructive" : "secondary"}
-                    className="ml-2"
-                  >
-                    {getRecordingStatus(selectedProgram.id)}
-                  </Badge>
-                )}
-              </DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className={`flex items-center gap-2 text-sm ${themeClasses.muted}`}>
-                <span>
-                  {formatEPGTime(selectedProgram.start)} - {formatEPGTime(selectedProgram.end)}
-                </span>
-                {selectedProgram.category && (
-                  <>
-                    <span>•</span>
-                    <Badge variant="secondary">{selectedProgram.category}</Badge>
-                  </>
-                )}
-              </div>
-              {selectedProgram.description && (
-                <p className={`text-sm ${themeClasses.text}`}>{selectedProgram.description}</p>
-              )}
+      <Dialog open={selectedProgram !== null} onOpenChange={() => setSelectedProgram(null)}>
+        <DialogContent className={`${themeClasses.dialog} shadow-xl`}>
+          {selectedProgram && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{selectedProgram.title}</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Badge variant="secondary">{selectedProgram.category || "General"}</Badge>
+                  <span className="text-sm text-gray-500">
+                    {formatEPGTime(selectedProgram.start)} - {formatEPGTime(selectedProgram.end)}
+                  </span>
+                </div>
 
-              {/* Recording Conflicts Warning */}
-              {recordingConflicts.some(
-                (conflict) =>
-                  conflict.recording1.programId === selectedProgram.id ||
-                  conflict.recording2.programId === selectedProgram.id,
-              ) && (
-                <div className="bg-yellow-50 dark:bg-yellow-900/50 border border-yellow-200 dark:border-yellow-600 rounded p-3">
-                  <div className={`${themeClasses.warning} text-sm font-medium mb-1`}>Recording Conflict</div>
-                  <div className={`${themeClasses.warning} text-xs opacity-80`}>
-                    This recording conflicts with another scheduled recording.
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-2">
-                <Button
-                  onClick={() => {
-                    const channel = getFilteredChannels().find((ch) => {
-                      const epgChannel = epgData.channels.find((ec) => ec.id === selectedProgram.channelId)
-                      return (
-                        epgChannel &&
-                        (ch.name.toLowerCase().includes(epgChannel.displayName.toLowerCase()) ||
-                          epgChannel.displayName.toLowerCase().includes(ch.name.toLowerCase()))
-                      )
-                    })
-                    if (channel) {
-                      playChannel(channel)
-                      setSelectedProgram(null)
-                    }
-                  }}
-                  disabled={
-                    !getFilteredChannels().some((ch) => {
-                      const epgChannel = epgData.channels.find((ec) => ec.id === selectedProgram.channelId)
-                      return (
-                        epgChannel &&
-                        (ch.name.toLowerCase().includes(epgChannel.displayName.toLowerCase()) ||
-                          epgChannel.displayName.toLowerCase().includes(ch.name.toLowerCase()))
-                      )
-                    })
-                  }
-                  className="bg-blue-500 hover:bg-blue-600 text-white"
-                >
-                  Watch Channel
-                </Button>
-
-                {!isProgramScheduled(selectedProgram.id) ? (
-                  <Button
-                    variant="outline"
-                    onClick={() => scheduleRecording(selectedProgram)}
-                    disabled={selectedProgram.end <= new Date()}
-                  >
-                    Schedule Recording
-                  </Button>
-                ) : (
-                  <Button
-                    variant="destructive"
-                    onClick={() => {
-                      const recording = recordings.find((r) => r.programId === selectedProgram.id)
-                      if (recording && recording.status === "scheduled") {
-                        cancelRecording(recording.id)
-                      }
-                    }}
-                  >
-                    Cancel Recording
-                  </Button>
-                )}
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
-
-      {/* Recording Details Dialog */}
-      {selectedRecording && (
-        <Dialog open={!!selectedRecording} onOpenChange={() => setSelectedRecording(null)}>
-          <DialogContent className={`${themeClasses.dialog} shadow-xl`}>
-            <DialogHeader>
-              <DialogTitle className="flex items-center justify-between">
-                {selectedRecording.title}
-                <Badge
-                  variant={
-                    selectedRecording.status === "recording"
-                      ? "destructive"
-                      : selectedRecording.status === "completed"
-                        ? "default"
-                        : "secondary"
-                  }
-                >
-                  {selectedRecording.status}
-                </Badge>
-              </DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <div className={`${themeClasses.muted}`}>Channel</div>
-                  <div>{selectedRecording.channelName}</div>
-                </div>
-                <div>
-                  <div className={`${themeClasses.muted}`}>Category</div>
-                  <div>{selectedRecording.category || "Unknown"}</div>
-                </div>
-                <div>
-                  <div className={`${themeClasses.muted}`}>Start Time</div>
-                  <div>{selectedRecording.startTime.toLocaleString()}</div>
-                </div>
-                <div>
-                  <div className={`${themeClasses.muted}`}>End Time</div>
-                  <div>{selectedRecording.endTime.toLocaleString()}</div>
-                </div>
-                {selectedRecording.fileSize && (
+                {selectedProgram.description && (
                   <div>
-                    <div className={`${themeClasses.muted}`}>File Size</div>
-                    <div>{formatFileSize(selectedRecording.fileSize)}</div>
+                    <h4 className="font-medium mb-2">Description</h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">{selectedProgram.description}</p>
                   </div>
                 )}
-                {selectedRecording.filePath && (
-                  <div>
-                    <div className={`${themeClasses.muted}`}>File Path</div>
-                    <div className={`text-xs font-mono ${themeClasses.muted}`}>{selectedRecording.filePath}</div>
-                  </div>
-                )}
-              </div>
 
-              {selectedRecording.description && (
-                <div>
-                  <div className={`${themeClasses.muted} text-sm mb-1`}>Description</div>
-                  <p className={`text-sm ${themeClasses.text}`}>{selectedRecording.description}</p>
+                <div className="flex gap-2">
+                  {!isProgramScheduled(selectedProgram.id) ? (
+                    <Button
+                      onClick={() => scheduleRecording(selectedProgram)}
+                      className="bg-red-500 hover:bg-red-600 text-white"
+                    >
+                      Schedule Recording
+                    </Button>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <Badge variant="destructive">Recording Scheduled</Badge>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          const recording = recordings.find((r) => r.programId === selectedProgram.id)
+                          if (recording) cancelRecording(recording.id)
+                        }}
+                      >
+                        Cancel Recording
+                      </Button>
+                    </div>
+                  )}
                 </div>
-              )}
-
-              <div className="flex gap-2">
-                {selectedRecording.status === "completed" && (
-                  <Button disabled className="bg-blue-500 text-white opacity-50">
-                    Play Recording
-                  </Button>
-                )}
-                {selectedRecording.status === "scheduled" && (
-                  <Button
-                    variant="destructive"
-                    onClick={() => {
-                      cancelRecording(selectedRecording.id)
-                      setSelectedRecording(null)
-                    }}
-                  >
-                    Cancel Recording
-                  </Button>
-                )}
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    deleteRecording(selectedRecording.id)
-                    setSelectedRecording(null)
-                  }}
-                >
-                  Delete
-                </Button>
               </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
