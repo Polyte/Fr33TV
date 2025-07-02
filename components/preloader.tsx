@@ -1,73 +1,94 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { Tv } from "lucide-react"
+import { useState, useEffect, memo } from "react"
+import { Tv, Wifi, Play, Settings, Zap } from "lucide-react"
 
 interface PreloaderProps {
   isLoading: boolean
-  onLoadingComplete?: () => void
+  onLoadingComplete: () => void
 }
 
-export function Preloader({ isLoading, onLoadingComplete }: PreloaderProps) {
+const Preloader = memo(function Preloader({ isLoading, onLoadingComplete }: PreloaderProps) {
   const [progress, setProgress] = useState(0)
-  const [loadingText, setLoadingText] = useState("Initializing...")
-  const [isVisible, setIsVisible] = useState(isLoading)
+  const [currentStage, setCurrentStage] = useState(0)
+  const [isVisible, setIsVisible] = useState(true)
 
-  const loadingSteps = [
-    { progress: 20, text: "Loading playlists..." },
-    { progress: 40, text: "Connecting to streams..." },
-    { progress: 60, text: "Preparing channels..." },
-    { progress: 80, text: "Setting up interface..." },
-    { progress: 100, text: "Ready to watch!" },
+  const stages = [
+    { icon: Tv, label: "Initializing IPTV Player", duration: 800 },
+    { icon: Wifi, label: "Connecting to services", duration: 600 },
+    { icon: Play, label: "Loading media components", duration: 500 },
+    { icon: Settings, label: "Configuring settings", duration: 400 },
+    { icon: Zap, label: "Optimizing performance", duration: 300 },
   ]
 
   useEffect(() => {
-    if (!isLoading) {
-      // Fade out animation
-      const timer = setTimeout(() => {
+    if (!isLoading) return
+
+    const totalDuration = 0
+    let currentProgress = 0
+
+    const runStages = async () => {
+      for (let i = 0; i < stages.length; i++) {
+        setCurrentStage(i)
+
+        const stageDuration = stages[i].duration
+        const stageProgressIncrement = 100 / stages.length
+
+        // Animate progress for this stage
+        const startProgress = currentProgress
+        const endProgress = currentProgress + stageProgressIncrement
+
+        await new Promise<void>((resolve) => {
+          const startTime = Date.now()
+
+          const animateProgress = () => {
+            const elapsed = Date.now() - startTime
+            const stageProgress = Math.min(elapsed / stageDuration, 1)
+            const newProgress = startProgress + stageProgress * stageProgressIncrement
+
+            setProgress(newProgress)
+
+            if (stageProgress < 1) {
+              requestAnimationFrame(animateProgress)
+            } else {
+              resolve()
+            }
+          }
+
+          animateProgress()
+        })
+
+        currentProgress = endProgress
+      }
+
+      // Complete loading
+      setProgress(100)
+
+      // Wait a bit before hiding
+      setTimeout(() => {
         setIsVisible(false)
-        onLoadingComplete?.()
+        setTimeout(onLoadingComplete, 500)
       }, 500)
-      return () => clearTimeout(timer)
-    } else {
-      setIsVisible(true)
-      setProgress(0)
-      setLoadingText("Initializing...")
     }
+
+    runStages()
   }, [isLoading, onLoadingComplete])
-
-  useEffect(() => {
-    if (isLoading && isVisible) {
-      let currentStep = 0
-      const interval = setInterval(() => {
-        if (currentStep < loadingSteps.length) {
-          const step = loadingSteps[currentStep]
-          setProgress(step.progress)
-          setLoadingText(step.text)
-          currentStep++
-        } else {
-          clearInterval(interval)
-        }
-      }, 800)
-
-      return () => clearInterval(interval)
-    }
-  }, [isLoading, isVisible])
 
   if (!isVisible) return null
 
+  const CurrentIcon = stages[currentStage]?.icon || Tv
+
   return (
-    <div
-      className={`fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 transition-opacity duration-500 ${
-        isLoading ? "opacity-100" : "opacity-0"
-      }`}
-    >
-      {/* Animated background particles */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900">
+      {/* Animated background */}
       <div className="absolute inset-0 overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-r from-blue-600/20 to-purple-600/20 animate-pulse" />
+
+        {/* Floating particles */}
         {Array.from({ length: 20 }).map((_, i) => (
           <div
             key={i}
-            className="absolute w-2 h-2 bg-blue-400 rounded-full opacity-20 animate-float"
+            className="absolute w-2 h-2 bg-blue-400/30 rounded-full animate-float"
             style={{
               left: `${Math.random() * 100}%`,
               top: `${Math.random() * 100}%`,
@@ -78,66 +99,58 @@ export function Preloader({ isLoading, onLoadingComplete }: PreloaderProps) {
         ))}
       </div>
 
-      {/* Main preloader content */}
-      <div className="relative z-10 text-center">
-        {/* Animated logo */}
-        <div className="mb-8 relative">
-          <div className="relative inline-block">
-            {/* Pulsing rings */}
-            <div className="absolute inset-0 w-24 h-24 border-4 border-blue-500 rounded-full animate-ping opacity-20" />
-            <div className="absolute inset-2 w-20 h-20 border-2 border-purple-400 rounded-full animate-ping opacity-30 animation-delay-500" />
-            <div className="absolute inset-4 w-16 h-16 border border-blue-300 rounded-full animate-ping opacity-40 animation-delay-1000" />
-
-            {/* Main logo */}
-            <div className="relative w-24 h-24 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center shadow-2xl animate-pulse-glow">
-              <Tv className="w-12 h-12 text-white animate-bounce" />
-            </div>
+      {/* Main content */}
+      <div className="relative z-10 text-center max-w-md mx-auto px-6">
+        {/* Logo */}
+        <div className="mb-8">
+          <div className="w-20 h-20 mx-auto mb-4 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center transform animate-bounce">
+            <Tv className="w-10 h-10 text-white" />
           </div>
+          <h1 className="text-3xl font-bold text-white mb-2">Fr33 TV</h1>
+          <p className="text-blue-200">Professional IPTV Experience</p>
         </div>
 
-        {/* App title */}
-        <h1 className="text-4xl md:text-5xl font-bold text-white mb-2 animate-fade-in">
-          <span className="bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent animate-gradient">
-            Fr33 TV
-          </span>
-        </h1>
-
-        <p className="text-blue-200 text-lg mb-8 animate-fade-in animation-delay-500">
-          Your Gateway to Free Television
-        </p>
+        {/* Current stage */}
+        <div className="mb-8">
+          <div className="w-16 h-16 mx-auto mb-4 bg-white/10 backdrop-blur-sm rounded-full flex items-center justify-center">
+            <CurrentIcon className="w-8 h-8 text-blue-300 animate-pulse" />
+          </div>
+          <p className="text-white text-lg font-medium">{stages[currentStage]?.label || "Loading..."}</p>
+        </div>
 
         {/* Progress bar */}
-        <div className="w-80 max-w-sm mx-auto mb-6">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-blue-200 text-sm font-medium">{loadingText}</span>
-            <span className="text-blue-300 text-sm font-bold">{progress}%</span>
-          </div>
-
-          <div className="w-full bg-gray-700 rounded-full h-3 overflow-hidden shadow-inner">
+        <div className="mb-6">
+          <div className="w-full bg-white/20 rounded-full h-2 mb-2 overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-full transition-all duration-700 ease-out relative overflow-hidden"
+              className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-300 ease-out"
               style={{ width: `${progress}%` }}
-            >
-              {/* Animated shimmer effect */}
-              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer" />
-            </div>
+            />
           </div>
+          <p className="text-blue-200 text-sm">{Math.round(progress)}% Complete</p>
         </div>
 
-        {/* Loading dots */}
-        <div className="flex justify-center space-x-2">
-          {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              className="w-3 h-3 bg-blue-400 rounded-full animate-bounce"
-              style={{ animationDelay: `${i * 0.2}s` }}
-            />
-          ))}
+        {/* Features preview */}
+        <div className="grid grid-cols-2 gap-4 text-xs text-blue-200">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+            <span>HD Streaming</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+            <span>EPG Support</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+            <span>Recording</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+            <span>Offline Mode</span>
+          </div>
         </div>
       </div>
-
-      {/* Bottom gradient overlay */}
-      <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-black/50 to-transparent" />
     </div>
   )
-}
+})
+
+export default Preloader
