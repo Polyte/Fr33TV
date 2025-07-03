@@ -128,7 +128,7 @@ export const ChannelList = memo(function ChannelList({
       if (!a.isWorking && b.isWorking) return 1
 
       // Then by name
-      return a.name.localeCompare(b.name)
+      return (a.name || '').localeCompare(b.name || '')
     })
 
     return filtered
