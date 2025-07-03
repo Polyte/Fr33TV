@@ -42,6 +42,7 @@ import {
   AlertTriangle,
   Wifi,
   WifiOff,
+  Menu,
 } from "lucide-react"
 
 // Lazy load heavy components
@@ -333,8 +334,9 @@ function IPTVPlayer() {
   const [recordings, setRecordings] = useState<Recording[]>([])
   const [showRecordings, setShowRecordings] = useState(false)
   const [recordingConflicts, setRecordingConflicts] = useState<RecordingConflict[]>([])
-  const [playingRecording, setPlayingRecording] = useState<Recording | null>(null)
   const [isRecordingPlayerOpen, setIsRecordingPlayerOpen] = useState(false)
+  const [playingRecording, setPlayingRecording] = useState<Recording | null>(null)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
 
   // Performance state
   const [isLoadingPlaylist, setIsLoadingPlaylist] = useState(false)
@@ -402,7 +404,7 @@ function IPTVPlayer() {
     return () => {
       window.removeEventListener("online", handleOnline)
       window.removeEventListener("offline", handleOffline)
-    };
+    }
   }, [])
 
   // Optimized toggle theme
@@ -962,20 +964,12 @@ function IPTVPlayer() {
     const now = new Date()
     const filename = `${selectedChannel.name.replace(/[^a-zA-Z0-9_-]/g, '_')}-${now.toISOString().replace(/[:.]/g, '-')}.mp4`
     try {
-      const res = await fetch('/api/record', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: selectedChannel.url, filename }),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        setRecordingFile(data.filePath)
-      } else {
-        setRecordingError(data.error || 'Recording failed')
-      }
-    } catch (err: any) {
-      setRecordingError(err.message || 'Recording failed')
-    } finally {
+      // REMOVE this line and any related ffmpeg/child_process usage:
+      // const ffmpeg = require('child_process').spawn(ffmpegPath, [
+      // ... existing code ...
+    } catch (error) {
+      console.error("Error recording:", error)
+      setRecordingError("An error occurred while recording")
       setIsRecording(false)
     }
   }
@@ -1068,8 +1062,18 @@ function IPTVPlayer() {
       )}
 
       <div className="flex h-screen">
+        {/* Mobile Sidebar Overlay */}
+        {isSidebarOpen && (
+          <div 
+            className="fixed inset-0 bg-black/50 z-40 md:hidden"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+        
         {/* Sidebar */}
-        <div className={`w-80 ${themeClasses.sidebar} border-r ${themeClasses.sidebarBorder} flex flex-col`}>
+        <div className={`fixed md:relative inset-y-0 left-0 z-50 w-80 ${themeClasses.sidebar} border-r ${themeClasses.sidebarBorder} flex flex-col transform transition-transform duration-300 ease-in-out ${
+          isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        }`}>
           {/* Header */}
           <div className="p-4 border-b border-gray-200 dark:border-gray-700">
             <div className="flex items-center justify-between mb-4">
@@ -1098,6 +1102,15 @@ function IPTVPlayer() {
                   className={`${themeClasses.button} ${themeClasses.buttonText} transform transition-all duration-300 hover:scale-110`}
                 >
                   {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                </Button>
+                {/* Mobile close button */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsSidebarOpen(false)}
+                  className={`${themeClasses.button} ${themeClasses.buttonText} md:hidden`}
+                >
+                  <X className="w-4 h-4" />
                 </Button>
               </div>
             </div>
@@ -1311,6 +1324,36 @@ function IPTVPlayer() {
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col">
+          {/* Mobile Header with Menu Button */}
+          <div className="md:hidden p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsSidebarOpen(true)}
+                  className={`${themeClasses.button} ${themeClasses.buttonText}`}
+                >
+                  <Menu className="w-5 h-5" />
+                </Button>
+                <h1 className="text-lg font-bold bg-gradient-to-r from-blue-500 to-purple-600 bg-clip-text text-transparent">
+                  Fr33 TV
+                </h1>
+              </div>
+              <div className="flex items-center gap-2">
+                {isOnline ? <Wifi className="w-4 h-4 text-green-500" /> : <WifiOff className="w-4 h-4 text-red-500" />}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleTheme}
+                  className={`${themeClasses.button} ${themeClasses.buttonText}`}
+                >
+                  {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                </Button>
+              </div>
+            </div>
+          </div>
+
           {/* Video Player */}
           <div className="flex-1 bg-black relative">
             {/* Video Error Display */}
@@ -1476,35 +1519,33 @@ function IPTVPlayer() {
                     <Maximize className="w-4 h-4" />
                   </Button>
                 </div>
-              </div>
-            </div>
 
-            {/* Record button */}
-            {selectedChannel && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleRecord}
-                disabled={isRecording || !!videoError}
-                className="text-white hover:bg-white/20"
-              >
-                {isRecording ? (
-                  <span className="flex items-center"><span className="animate-pulse w-2 h-2 bg-red-500 rounded-full mr-2"></span>Recording...</span>
-                ) : (
-                  <span className="flex items-center"><span className="w-2 h-2 bg-red-500 rounded-full mr-2"></span>Record</span>
+                {selectedChannel && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRecord}
+                    disabled={isRecording || !!videoError}
+                    className="text-white hover:bg-white/20"
+                  >
+                    {isRecording ? (
+                      <span className="flex items-center"><span className="animate-pulse w-2 h-2 bg-red-500 rounded-full mr-2"></span>Recording...</span>
+                    ) : (
+                      <span className="flex items-center"><span className="w-2 h-2 bg-red-500 rounded-full mr-2"></span>Record</span>
+                    )}
+                  </Button>
                 )}
-              </Button>
-            )}
-
-            {/* Recording status or error */}
-            {recordingError && (
-              <div className="text-xs text-red-400 mt-2">{recordingError}</div>
-            )}
-            {recordingFile && (
-              <div className="text-xs text-green-400 mt-2">
-                Recording saved: <a href={recordingFile} download className="underline">Download</a>
               </div>
-            )}
+
+              {recordingError && (
+                <div className="text-xs text-red-400 mt-2">{recordingError}</div>
+              )}
+              {recordingFile && (
+                <div className="text-xs text-green-400 mt-2">
+                  Recording saved: <a href={recordingFile} download className="underline">Download</a>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
