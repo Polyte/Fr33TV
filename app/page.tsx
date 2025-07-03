@@ -355,6 +355,11 @@ function IPTVPlayer() {
   // Network state
   const [isOnline, setIsOnline] = useState(true)
 
+  // Recording state
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingError, setRecordingError] = useState<string | null>(null)
+  const [recordingFile, setRecordingFile] = useState<string | null>(null)
+
   const videoRef = useRef<HTMLVideoElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -397,7 +402,7 @@ function IPTVPlayer() {
     return () => {
       window.removeEventListener("online", handleOnline)
       window.removeEventListener("offline", handleOffline)
-    }
+    };
   }, [])
 
   // Optimized toggle theme
@@ -417,32 +422,17 @@ function IPTVPlayer() {
   // Initialize app with performance optimizations
   useEffect(() => {
     startRender()
-
     const initializeApp = async () => {
       try {
-        // Initialize date state on client side
         setEpgDate(new Date())
-        
-        // Load theme preference
         const savedTheme = getCached("iptv-theme") || (typeof window !== 'undefined' ? localStorage.getItem("iptv-theme") : null)
-        if (savedTheme === "dark") {
-          setIsDarkMode(true)
-        }
-
-        // Load saved playlists with caching
-        const cachedPlaylists = getCached("iptv-playlists")
-        if (cachedPlaylists) {
-          setPlaylists(cachedPlaylists)
-        } else {
-          const savedPlaylists = typeof window !== 'undefined' ? localStorage.getItem("iptv-playlists") : null
-          if (savedPlaylists) {
-            const parsedPlaylists = JSON.parse(savedPlaylists)
-            setPlaylists(parsedPlaylists)
-            setCached("iptv-playlists", parsedPlaylists)
-          }
-        }
-
-        // Load saved recordings
+        if (savedTheme === "dark") setIsDarkMode(true)
+        // Fetch playlists from backend
+        const res = await fetch('/api/playlists')
+        const data = await res.json()
+        setPlaylists(data)
+        if (data.length > 0) setSelectedPlaylist(data[0].id)
+        // Load saved recordings (keep as is)
         const savedRecordings = typeof window !== 'undefined' ? localStorage.getItem("iptv-recordings") : null
         if (savedRecordings) {
           const parsedRecordings = JSON.parse(savedRecordings).map((r: any) => ({
@@ -452,20 +442,8 @@ function IPTVPlayer() {
           }))
           setRecordings(parsedRecordings)
         }
-
-        // Simulate initialization with reduced delay
         await new Promise((resolve) => setTimeout(resolve, 1500))
-
         setIsInitialized(true)
-
-        // Load default playlist if needed
-        const hasLoadedDefault = typeof window !== 'undefined' ? localStorage.getItem("iptv-default-loaded") : null
-        if (!hasLoadedDefault && playlists.length === 0) {
-          await loadDefaultPlaylist()
-          if (typeof window !== 'undefined') {
-            localStorage.setItem("iptv-default-loaded", "true")
-          }
-        }
       } catch (error) {
         console.error("Error initializing app:", error)
         toast({
@@ -478,7 +456,6 @@ function IPTVPlayer() {
         endRender()
       }
     }
-
     initializeApp()
   }, [])
 
@@ -496,14 +473,6 @@ function IPTVPlayer() {
       }
     }
   }, [isDarkMode, isInitialized, setCached])
-
-  // Optimized playlist persistence
-  useEffect(() => {
-    if (isInitialized && typeof window !== 'undefined') {
-      localStorage.setItem("iptv-playlists", JSON.stringify(playlists))
-      setCached("iptv-playlists", playlists)
-    }
-  }, [playlists, isInitialized, setCached])
 
   // Video event handlers
   const handleLoadStart = useCallback(() => {
@@ -605,83 +574,28 @@ function IPTVPlayer() {
   // Optimized add playlist from URL
   const addPlaylistFromUrl = useCallback(async () => {
     if (!playlistName || !playlistUrl) return
-
     setIsLoadingPlaylist(true)
     setLoadingProgress(0)
-
     try {
-      // Check cache first
-      const cacheKey = `playlist-${playlistUrl}`
-      const cachedChannels = getCached(cacheKey)
-
-      if (cachedChannels) {
-        const newPlaylist: Playlist = {
-          id: generateId("playlist", { name: playlistName, channels: cachedChannels }),
-          name: playlistName,
-          channels: cachedChannels,
-        }
-        setPlaylists((prev) => [...prev, newPlaylist])
-        setPlaylistName("")
-        setPlaylistUrl("")
-        setIsAddPlaylistOpen(false)
-        setIsLoadingPlaylist(false)
-        toast({
-          title: "Playlist Added",
-          description: `${playlistName} has been added successfully.`,
-        })
-        return
-      }
-
-      const response = await fetch(playlistUrl)
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-      }
-
-      const content = await response.text()
-
-      const channels = await parseM3UOptimized(content, (progress) => {
-        setLoadingProgress(progress)
+      const res = await fetch('/api/playlists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: crypto.randomUUID(), name: playlistName, url: playlistUrl, channels: '[]' }),
       })
-
-      if (channels.length === 0) {
-        throw new Error("No valid channels found in playlist")
-      }
-
-      // Cache the channels
-      setCached(cacheKey, channels)
-
-      const newPlaylist: Playlist = {
-        id: generateId("playlist", { name: playlistName, channels }),
-        name: playlistName,
-        channels,
-      }
-
+      if (!res.ok) throw new Error('Failed to add playlist')
+      const newPlaylist = await res.json()
       setPlaylists((prev) => [...prev, newPlaylist])
-
-      // Update categories
-      const categorySet = new Set(channels.map((ch) => ch.group))
-      setCategories(Array.from(categorySet).filter((group): group is string => typeof group === "string").sort())
-
       setPlaylistName("")
       setPlaylistUrl("")
       setIsAddPlaylistOpen(false)
-
-      toast({
-        title: "Playlist Added",
-        description: `${playlistName} has been added with ${channels.length} channels.`,
-      })
+      toast({ title: "Playlist Added", description: `${playlistName} has been added successfully.` })
     } catch (error) {
-      console.error("Error fetching playlist:", error)
-      toast({
-        title: "Error Adding Playlist",
-        description: error instanceof Error ? error.message : "Failed to fetch playlist. Please check the URL.",
-        variant: "destructive",
-      })
+      toast({ title: "Error Adding Playlist", description: error instanceof Error ? error.message : "Failed to add playlist.", variant: "destructive" })
     } finally {
       setIsLoadingPlaylist(false)
       setLoadingProgress(0)
     }
-  }, [playlistName, playlistUrl, getCached, setCached, toast])
+  }, [playlistName, playlistUrl, toast])
 
   // Optimized add playlist from content
   const addPlaylistFromContent = useCallback(async () => {
@@ -1038,6 +952,72 @@ function IPTVPlayer() {
       description: `${demoChannels.length} demo channels are ready to play.`,
     })
   }, [toast])
+
+  // Handle recording
+  const handleRecord = async () => {
+    if (!selectedChannel) return
+    setIsRecording(true)
+    setRecordingError(null)
+    setRecordingFile(null)
+    const now = new Date()
+    const filename = `${selectedChannel.name.replace(/[^a-zA-Z0-9_-]/g, '_')}-${now.toISOString().replace(/[:.]/g, '-')}.mp4`
+    try {
+      const res = await fetch('/api/record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: selectedChannel.url, filename }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setRecordingFile(data.filePath)
+      } else {
+        setRecordingError(data.error || 'Recording failed')
+      }
+    } catch (err: any) {
+      setRecordingError(err.message || 'Recording failed')
+    } finally {
+      setIsRecording(false)
+    }
+  }
+
+  // Refactor playlist deletion to call DELETE /api/playlists?id=...
+  const handleDeletePlaylist = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/playlists?id=${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete playlist')
+      setPlaylists((prev) => prev.filter((p) => p.id !== id))
+      if (selectedPlaylist === id) setSelectedPlaylist(null)
+      toast({ title: "Playlist Deleted", description: "Playlist has been removed." })
+    } catch (error) {
+      toast({ title: "Error Deleting Playlist", description: error instanceof Error ? error.message : "Failed to delete playlist.", variant: "destructive" })
+    }
+  }, [selectedPlaylist, toast])
+
+  // When a playlist is selected, fetch and parse its M3U from playlist.url
+  useEffect(() => {
+    const fetchChannels = async () => {
+      if (!selectedPlaylist) return
+      const playlist = playlists.find((p) => p.id === selectedPlaylist)
+      if (!playlist || !playlist.url) return
+      setIsLoadingPlaylist(true)
+      try {
+        const res = await fetch(playlist.url)
+        if (!res.ok) throw new Error('Failed to fetch playlist content')
+        const content = await res.text()
+        const channels = await parseM3UOptimized(content, setLoadingProgress)
+        setPlaylists((prev) => prev.map((p) => p.id === playlist.id ? { ...p, channels } : p))
+        // Update categories
+        const categorySet = new Set(channels.map((ch) => ch.group))
+        setCategories(Array.from(categorySet).filter((group): group is string => typeof group === "string").sort())
+      } catch (error) {
+        toast({ title: "Error Loading Playlist", description: error instanceof Error ? error.message : "Failed to load playlist.", variant: "destructive" })
+      } finally {
+        setIsLoadingPlaylist(false)
+        setLoadingProgress(0)
+      }
+    }
+    fetchChannels()
+  }, [selectedPlaylist])
 
   // Render loading state
   if (isAppLoading) {
@@ -1498,6 +1478,33 @@ function IPTVPlayer() {
                 </div>
               </div>
             </div>
+
+            {/* Record button */}
+            {selectedChannel && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRecord}
+                disabled={isRecording || !!videoError}
+                className="text-white hover:bg-white/20"
+              >
+                {isRecording ? (
+                  <span className="flex items-center"><span className="animate-pulse w-2 h-2 bg-red-500 rounded-full mr-2"></span>Recording...</span>
+                ) : (
+                  <span className="flex items-center"><span className="w-2 h-2 bg-red-500 rounded-full mr-2"></span>Record</span>
+                )}
+              </Button>
+            )}
+
+            {/* Recording status or error */}
+            {recordingError && (
+              <div className="text-xs text-red-400 mt-2">{recordingError}</div>
+            )}
+            {recordingFile && (
+              <div className="text-xs text-green-400 mt-2">
+                Recording saved: <a href={recordingFile} download className="underline">Download</a>
+              </div>
+            )}
           </div>
         </div>
       </div>
