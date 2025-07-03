@@ -9,6 +9,8 @@ const OfflineIndicator = () => {
   const [showIndicator, setShowIndicator] = useState(false)
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+
     const handleOnline = () => {
       setIsOnline(true)
       setShowIndicator(true)

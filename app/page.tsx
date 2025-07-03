@@ -6,7 +6,7 @@ import type React from "react"
 import { useState, useEffect, useMemo, useCallback, Suspense, lazy } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -136,55 +136,50 @@ const DEMO_SOURCES = [
 const parseM3UOptimized = (content: string, onProgress?: (progress: number) => void): Promise<Channel[]> => {
   return new Promise((resolve) => {
     // Use Web Worker if available for large playlists
-    if (content.length > 100000 && typeof Worker !== "undefined") {
-      const worker = new Worker(
-        URL.createObjectURL(
-          new Blob(
-            [
-              `
-          self.onmessage = function(e) {
-            const { content } = e.data;
-            const lines = content.split('\n').map(line => line.trim()).filter(line => line);
-            const channels = [];
-            const categorySet = new Set();
-            
-            for (let i = 0; i < lines.length; i++) {
-              if (lines[i].startsWith('#EXTINF:')) {
-                const extinf = lines[i];
-                const url = lines[i + 1];
+    if (content.length > 100000 && typeof Worker !== "undefined" && typeof window !== "undefined") {
+      const workerCode = `
+        self.onmessage = function(e) {
+          const { content } = e.data;
+          const lines = content.split('\\n').map(line => line.trim()).filter(line => line);
+          const channels = [];
+          const categorySet = new Set();
+          
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith('#EXTINF:')) {
+              const extinf = lines[i];
+              const url = lines[i + 1];
+              
+              if (url && !url.startsWith('#')) {
+                const nameMatch = extinf.match(/,(.+)$/);
+                const name = nameMatch ? nameMatch[1].trim() : 'Unknown Channel';
                 
-                if (url && !url.startsWith('#')) {
-                  const nameMatch = extinf.match(/,(.+)$/);
-                  const name = nameMatch ? nameMatch[1].trim() : 'Unknown Channel';
-                  
-                  const groupMatch = extinf.match(/group-title="([^"]+)"/i);
-                  const group = groupMatch ? groupMatch[1] : 'Uncategorized';
-                  
-                  const logoMatch = extinf.match(/tvg-logo="([^"]+)"/i);
-                  const logo = logoMatch ? logoMatch[1] : undefined;
-                  
-                  channels.push({ name, url, group, logo });
-                  categorySet.add(group);
-                  
-                  if (channels.length % 100 === 0) {
-                    self.postMessage({ type: 'progress', progress: (i / lines.length) * 100 });
-                  }
+                const groupMatch = extinf.match(/group-title="([^"]+)"/i);
+                const group = groupMatch ? groupMatch[1] : 'Uncategorized';
+                
+                const logoMatch = extinf.match(/tvg-logo="([^"]+)"/i);
+                const logo = logoMatch ? logoMatch[1] : undefined;
+                
+                channels.push({ name, url, group, logo });
+                categorySet.add(group);
+                
+                if (channels.length % 100 === 0) {
+                  self.postMessage({ type: 'progress', progress: (i / lines.length) * 100 });
                 }
               }
             }
-            
-            self.postMessage({ 
-              type: 'complete', 
-              channels, 
-              categories: Array.from(categorySet).sort() 
-            });
-          };
-        `,
-            ],
-            { type: "application/javascript" },
-          ),
-        ),
-      )
+          }
+          
+          self.postMessage({ 
+            type: 'complete', 
+            channels, 
+            categories: Array.from(categorySet).sort() 
+          });
+        };
+      `;
+
+      const blob = new Blob([workerCode], { type: "application/javascript" });
+      const workerUrl = URL.createObjectURL(blob);
+      const worker = new Worker(workerUrl);
 
       worker.onmessage = (e) => {
         const { type, channels, progress } = e.data
@@ -192,49 +187,63 @@ const parseM3UOptimized = (content: string, onProgress?: (progress: number) => v
           onProgress(progress)
         } else if (type === "complete") {
           worker.terminate()
+          URL.revokeObjectURL(workerUrl)
           resolve(channels)
         }
+      }
+
+      worker.onerror = (error) => {
+        console.error('Web Worker error:', error);
+        worker.terminate()
+        URL.revokeObjectURL(workerUrl)
+        // Fallback to main thread parsing
+        resolve(parseM3UInMainThread(content, onProgress))
       }
 
       worker.postMessage({ content })
     } else {
       // Fallback to main thread parsing
-      const lines = content
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line)
-      const channels: Channel[] = []
-      let processed = 0
-
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i].startsWith("#EXTINF:")) {
-          const extinf = lines[i]
-          const url = lines[i + 1]
-
-          if (url && !url.startsWith("#")) {
-            const nameMatch = extinf.match(/,(.+)$/)
-            const name = nameMatch ? nameMatch[1].trim() : "Unknown Channel"
-
-            const groupMatch = extinf.match(/group-title="([^"]+)"/i)
-            const group = groupMatch ? groupMatch[1] : "Uncategorized"
-
-            const logoMatch = extinf.match(/tvg-logo="([^"]+)"/i)
-            const logo = logoMatch ? logoMatch[1] : undefined
-
-            channels.push({ name, url, group, logo })
-
-            processed++
-            if (onProgress && processed % 100 === 0) {
-              onProgress((processed / (lines.length / 2)) * 100)
-            }
-          }
-        }
-      }
-
-      if (onProgress) onProgress(100)
-      resolve(channels)
+      resolve(parseM3UInMainThread(content, onProgress))
     }
   })
+}
+
+// Main thread M3U parsing function
+const parseM3UInMainThread = (content: string, onProgress?: (progress: number) => void): Channel[] => {
+  const lines = content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line)
+  const channels: Channel[] = []
+  let processed = 0
+
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith("#EXTINF:")) {
+      const extinf = lines[i]
+      const url = lines[i + 1]
+
+      if (url && !url.startsWith("#")) {
+        const nameMatch = extinf.match(/,(.+)$/)
+        const name = nameMatch ? nameMatch[1].trim() : "Unknown Channel"
+
+        const groupMatch = extinf.match(/group-title="([^"]+)"/i)
+        const group = groupMatch ? groupMatch[1] : "Uncategorized"
+
+        const logoMatch = extinf.match(/tvg-logo="([^"]+)"/i)
+        const logo = logoMatch ? logoMatch[1] : undefined
+
+        channels.push({ name, url, group, logo })
+
+        processed++
+        if (onProgress && processed % 100 === 0) {
+          onProgress((processed / (lines.length / 2)) * 100)
+        }
+      }
+    }
+  }
+
+  if (onProgress) onProgress(100)
+  return channels
 }
 
 // Dummy parseXMLTV function (replace with actual implementation)
@@ -242,17 +251,49 @@ const parseXMLTV = (xml: string): EPGData => {
   return { channels: [], programs: [] }
 }
 
-// Video source validation
+// Generate stable IDs for SSR consistency
+const generateId = (prefix: string, data: any): string => {
+  const hash = JSON.stringify(data).split('').reduce((a, b) => {
+    a = ((a << 5) - a) + b.charCodeAt(0)
+    return a & a
+  }, 0)
+  return `${prefix}-${Math.abs(hash)}-${Date.now()}`
+}
+
+// Video source validation with fallback methods
 const validateVideoSource = async (url: string): Promise<boolean> => {
   try {
-    const response = await fetch(url, { method: "HEAD" })
-    return response.ok
-  } catch {
-    return false
+    // First try HEAD request
+    const headResponse = await fetch(url, { 
+      method: "HEAD",
+      signal: AbortSignal.timeout(5000) // 5 second timeout
+    })
+    
+    if (headResponse.ok) {
+      return true
+    }
+    
+    // If HEAD returns 405 (Method Not Allowed), try GET with range
+    if (headResponse.status === 405) {
+      const getResponse = await fetch(url, {
+        method: "GET",
+        headers: { "Range": "bytes=0-1023" }, // Request first 1KB
+        signal: AbortSignal.timeout(5000)
+      })
+      return getResponse.ok || getResponse.status === 206 // 206 Partial Content is also valid
+    }
+    
+    // For other status codes, check if they're in the acceptable range
+    return headResponse.status >= 200 && headResponse.status < 400
+  } catch (error) {
+    // If all methods fail, assume the source might still be valid
+    // Many IPTV sources don't support HEAD requests but work fine with video players
+    console.warn(`Video source validation failed for ${url}:`, error)
+    return true // Assume valid unless we can definitively prove it's not
   }
 }
 
-export default function IPTVPlayer() {
+function IPTVPlayer() {
   const { startRender, endRender } = usePerformance()
   const { get: getCached, set: setCached } = useCache<any>()
   const { toast } = useToast()
@@ -283,7 +324,7 @@ export default function IPTVPlayer() {
   // EPG state
   const [epgData, setEpgData] = useState<EPGData>({ channels: [], programs: [] })
   const [showEPG, setShowEPG] = useState(false)
-  const [epgDate, setEpgDate] = useState(new Date())
+  const [epgDate, setEpgDate] = useState<Date | null>(null)
   const [isAddEPGOpen, setIsAddEPGOpen] = useState(false)
   const [epgUrl, setEpgUrl] = useState("")
   const [selectedProgram, setSelectedProgram] = useState<EPGProgram | null>(null)
@@ -345,6 +386,8 @@ export default function IPTVPlayer() {
 
   // Network status monitoring
   useEffect(() => {
+    if (typeof window === 'undefined') return
+
     const handleOnline = () => setIsOnline(true)
     const handleOffline = () => setIsOnline(false)
 
@@ -377,8 +420,11 @@ export default function IPTVPlayer() {
 
     const initializeApp = async () => {
       try {
+        // Initialize date state on client side
+        setEpgDate(new Date())
+        
         // Load theme preference
-        const savedTheme = getCached("iptv-theme") || localStorage.getItem("iptv-theme")
+        const savedTheme = getCached("iptv-theme") || (typeof window !== 'undefined' ? localStorage.getItem("iptv-theme") : null)
         if (savedTheme === "dark") {
           setIsDarkMode(true)
         }
@@ -388,7 +434,7 @@ export default function IPTVPlayer() {
         if (cachedPlaylists) {
           setPlaylists(cachedPlaylists)
         } else {
-          const savedPlaylists = localStorage.getItem("iptv-playlists")
+          const savedPlaylists = typeof window !== 'undefined' ? localStorage.getItem("iptv-playlists") : null
           if (savedPlaylists) {
             const parsedPlaylists = JSON.parse(savedPlaylists)
             setPlaylists(parsedPlaylists)
@@ -397,7 +443,7 @@ export default function IPTVPlayer() {
         }
 
         // Load saved recordings
-        const savedRecordings = localStorage.getItem("iptv-recordings")
+        const savedRecordings = typeof window !== 'undefined' ? localStorage.getItem("iptv-recordings") : null
         if (savedRecordings) {
           const parsedRecordings = JSON.parse(savedRecordings).map((r: any) => ({
             ...r,
@@ -413,10 +459,12 @@ export default function IPTVPlayer() {
         setIsInitialized(true)
 
         // Load default playlist if needed
-        const hasLoadedDefault = localStorage.getItem("iptv-default-loaded")
+        const hasLoadedDefault = typeof window !== 'undefined' ? localStorage.getItem("iptv-default-loaded") : null
         if (!hasLoadedDefault && playlists.length === 0) {
           await loadDefaultPlaylist()
-          localStorage.setItem("iptv-default-loaded", "true")
+          if (typeof window !== 'undefined') {
+            localStorage.setItem("iptv-default-loaded", "true")
+          }
         }
       } catch (error) {
         console.error("Error initializing app:", error)
@@ -436,7 +484,7 @@ export default function IPTVPlayer() {
 
   // Optimized theme persistence
   useEffect(() => {
-    if (isInitialized) {
+    if (isInitialized && typeof window !== 'undefined') {
       const theme = isDarkMode ? "dark" : "light"
       localStorage.setItem("iptv-theme", theme)
       setCached("iptv-theme", theme)
@@ -451,86 +499,108 @@ export default function IPTVPlayer() {
 
   // Optimized playlist persistence
   useEffect(() => {
-    if (isInitialized) {
+    if (isInitialized && typeof window !== 'undefined') {
       localStorage.setItem("iptv-playlists", JSON.stringify(playlists))
       setCached("iptv-playlists", playlists)
     }
   }, [playlists, isInitialized, setCached])
 
   // Video event handlers
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
+  const handleLoadStart = useCallback(() => {
+    setIsVideoLoading(true)
+    setVideoError(null)
+    
+    // Set a timeout to prevent infinite loading
+    // IPTV streams may take longer to start, so we use a longer timeout
+    setTimeout(() => {
+      if (videoRef.current && videoRef.current.currentTime === 0 && videoRef.current.readyState < 2) {
+        setIsVideoLoading(false)
+        setVideoError("Stream loading timeout. The channel may be unavailable or blocked.")
+      }
+    }, 25000) // 25 second timeout for IPTV streams
+  }, [])
 
-    const handleLoadStart = () => {
-      setIsVideoLoading(true)
-      setVideoError(null)
+  const handleCanPlay = useCallback(() => {
+    setIsVideoLoading(false)
+    setVideoError(null)
+  }, [])
+
+  const handleError = useCallback((e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
+    setIsVideoLoading(false)
+    const target = e.currentTarget
+    let errorMessage = "Unknown video error"
+
+    if (target.error) {
+      switch (target.error.code) {
+        case MediaError.MEDIA_ERR_ABORTED:
+          errorMessage = "Video playback was aborted"
+          break
+        case MediaError.MEDIA_ERR_NETWORK:
+          errorMessage = "Network error occurred while loading video"
+          break
+        case MediaError.MEDIA_ERR_DECODE:
+          errorMessage = "Video format not supported or corrupted"
+          break
+        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+          errorMessage = "Video source not supported or not found"
+          break
+      }
     }
 
-    const handleCanPlay = () => {
-      setIsVideoLoading(false)
-      setVideoError(null)
-    }
-
-    const handleError = (e: Event) => {
-      setIsVideoLoading(false)
-      const target = e.target as HTMLVideoElement
-      let errorMessage = "Unknown video error"
-
-      if (target.error) {
-        switch (target.error.code) {
-          case MediaError.MEDIA_ERR_ABORTED:
-            errorMessage = "Video playback was aborted"
-            break
-          case MediaError.MEDIA_ERR_NETWORK:
-            errorMessage = "Network error occurred while loading video"
-            break
-          case MediaError.MEDIA_ERR_DECODE:
-            errorMessage = "Video format not supported or corrupted"
-            break
-          case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-            errorMessage = "Video source not supported or not found"
-            break
+    // Check for specific HTTP errors and IPTV issues
+    if (target.src) {
+      const url = new URL(target.src)
+      if (url.protocol === 'https:' || url.protocol === 'http:') {
+        // Check for common IPTV server issues
+        if (target.error && target.error.code === MediaError.MEDIA_ERR_NETWORK) {
+          errorMessage = "Stream server error (405/403). This channel may be temporarily unavailable."
+        } else if (target.error && target.error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+          errorMessage = "Stream format not supported. This may be a geoblocked stream, private stream, or unsupported format. Try using a different browser or VPN."
+        } else if (target.error && target.error.code === MediaError.MEDIA_ERR_DECODE) {
+          errorMessage = "Stream encoding not supported. The stream may use a codec not supported by your browser."
+        } else {
+          errorMessage = "Stream may be unavailable, blocked, or requires authentication. Some IPTV streams require specific headers or user agents."
         }
       }
+    }
 
-      setVideoError(errorMessage)
+    setVideoError(errorMessage)
+    
+    // Only show toast for non-abort errors (user-initiated stops shouldn't show errors)
+    if (target.error && target.error.code !== MediaError.MEDIA_ERR_ABORTED) {
       toast({
         title: "Video Error",
         description: errorMessage,
         variant: "destructive",
       })
     }
-
-    const handleTimeUpdate = () => {
-      setCurrentTime(video.currentTime)
-    }
-
-    const handleDurationChange = () => {
-      setDuration(video.duration)
-    }
-
-    const handlePlay = () => setIsPlaying(true)
-    const handlePause = () => setIsPlaying(false)
-
-    video.addEventListener("loadstart", handleLoadStart)
-    video.addEventListener("canplay", handleCanPlay)
-    video.addEventListener("error", handleError)
-    video.addEventListener("timeupdate", handleTimeUpdate)
-    video.addEventListener("durationchange", handleDurationChange)
-    video.addEventListener("play", handlePlay)
-    video.addEventListener("pause", handlePause)
-
-    return () => {
-      video.removeEventListener("loadstart", handleLoadStart)
-      video.removeEventListener("canplay", handleCanPlay)
-      video.removeEventListener("error", handleError)
-      video.removeEventListener("timeupdate", handleTimeUpdate)
-      video.removeEventListener("durationchange", handleDurationChange)
-      video.removeEventListener("play", handlePlay)
-      video.removeEventListener("pause", handlePause)
-    }
   }, [toast])
+
+  const handleTimeUpdate = useCallback(() => {
+    if (videoRef.current) {
+      setCurrentTime(videoRef.current.currentTime)
+    }
+  }, [])
+
+  const handleDurationChange = useCallback(() => {
+    if (videoRef.current) {
+      setDuration(videoRef.current.duration)
+    }
+  }, [])
+
+  // Set volume when it changes
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.volume = volume
+    }
+  }, [volume])
+
+  // Set muted state when it changes
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.muted = isMuted
+    }
+  }, [isMuted])
 
   // Optimized add playlist from URL
   const addPlaylistFromUrl = useCallback(async () => {
@@ -546,7 +616,7 @@ export default function IPTVPlayer() {
 
       if (cachedChannels) {
         const newPlaylist: Playlist = {
-          id: Date.now().toString(),
+          id: generateId("playlist", { name: playlistName, channels: cachedChannels }),
           name: playlistName,
           channels: cachedChannels,
         }
@@ -581,7 +651,7 @@ export default function IPTVPlayer() {
       setCached(cacheKey, channels)
 
       const newPlaylist: Playlist = {
-        id: Date.now().toString(),
+        id: generateId("playlist", { name: playlistName, channels }),
         name: playlistName,
         channels,
       }
@@ -589,8 +659,8 @@ export default function IPTVPlayer() {
       setPlaylists((prev) => [...prev, newPlaylist])
 
       // Update categories
-      const categorySet = new Set(channels.map((ch) => ch.group).filter(Boolean))
-      setCategories(Array.from(categorySet).sort())
+      const categorySet = new Set(channels.map((ch) => ch.group))
+      setCategories(Array.from(categorySet).filter((group): group is string => typeof group === "string").sort())
 
       setPlaylistName("")
       setPlaylistUrl("")
@@ -625,7 +695,7 @@ export default function IPTVPlayer() {
       }
 
       const newPlaylist: Playlist = {
-        id: Date.now().toString(),
+        id: generateId("playlist", { name: playlistName, channels }),
         name: playlistName,
         channels,
       }
@@ -633,8 +703,8 @@ export default function IPTVPlayer() {
       setPlaylists((prev) => [...prev, newPlaylist])
 
       // Update categories
-      const categorySet = new Set(channels.map((ch) => ch.group).filter(Boolean))
-      setCategories(Array.from(categorySet).sort())
+      const categorySet = new Set(channels.map((ch) => ch.group))
+      setCategories(Array.from(categorySet).filter((group): group is string => typeof group === "string").sort())
 
       setPlaylistName("")
       setPlaylistContent("")
@@ -714,20 +784,101 @@ export default function IPTVPlayer() {
 
       if (videoRef.current) {
         try {
-          // Validate source before setting
-          const isValid = await validateVideoSource(channel.url)
-          if (!isValid && isOnline) {
-            throw new Error("Channel source is not accessible")
-          }
+          // Reset video state
+          videoRef.current.pause()
+          videoRef.current.currentTime = 0
+          setCurrentTime(0)
+          setDuration(0)
+          setIsPlaying(false)
 
-          videoRef.current.src = channel.url
-          videoRef.current.load()
+          // Set the video source immediately for better UX
+          // For IPTV streams, we need to handle different formats
+          const video = videoRef.current
+          
+          // Clear any existing sources
+          while (video.firstChild) {
+            video.removeChild(video.firstChild)
+          }
+          
+          // Add source elements for different stream formats
+          const formats = [
+            { type: 'application/x-mpegURL', ext: '.m3u8' },
+            { type: 'application/vnd.apple.mpegurl', ext: '.m3u8' },
+            { type: 'video/mp4', ext: '.mp4' },
+            { type: 'video/webm', ext: '.webm' },
+            { type: 'video/ogg', ext: '.ogv' },
+            { type: 'application/octet-stream', ext: '' } // Generic fallback
+          ]
+          
+          formats.forEach(format => {
+            const source = document.createElement('source')
+            source.src = channel.url
+            source.type = format.type
+            video.appendChild(source)
+          })
+          
+          video.load()
+
+          // For IPTV streams, we need to handle them differently than regular videos
+          // Most IPTV streams are live and don't have a duration
+          videoRef.current.addEventListener('loadedmetadata', () => {
+            // For live streams, duration is usually Infinity
+            if (videoRef.current && !isFinite(videoRef.current.duration)) {
+              setDuration(0) // Hide progress bar for live content
+            }
+          }, { once: true })
+
+          // Validate source in background (non-blocking)
+          if (isOnline) {
+            validateVideoSource(channel.url).then((isValid) => {
+              if (!isValid) {
+                console.warn(`Channel ${channel.name} may not be accessible`)
+                // Don't show error toast for validation failures, let the video element handle it
+              }
+            }).catch((error) => {
+              console.warn(`Validation failed for ${channel.name}:`, error)
+            })
+            
+            // Try to detect stream format and add appropriate headers
+            fetch(channel.url, { 
+              method: 'HEAD',
+              signal: AbortSignal.timeout(3000),
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+              }
+            }).then(response => {
+              const contentType = response.headers.get('content-type')
+              if (contentType) {
+                console.log(`Stream content type: ${contentType}`)
+                // Update source type if needed
+                if (videoRef.current && videoRef.current.children.length > 0) {
+                  const firstSource = videoRef.current.children[0] as HTMLSourceElement
+                  if (firstSource && !contentType.includes(firstSource.type)) {
+                    firstSource.type = contentType
+                  }
+                }
+              }
+            }).catch(error => {
+              console.warn(`Could not detect stream format:`, error)
+              // Try with a different user agent as fallback
+              fetch(channel.url, { 
+                method: 'HEAD',
+                signal: AbortSignal.timeout(2000),
+                headers: {
+                  'User-Agent': 'VLC/3.0.0 LibVLC/3.0.0'
+                }
+              }).catch(error2 => {
+                console.warn(`Second attempt failed:`, error2)
+              })
+            })
+          }
 
           toast({
             title: "Channel Selected",
             description: `Now playing: ${channel.name}`,
           })
         } catch (error) {
+          console.error("Error setting video source:", error)
           setVideoError(`Failed to load channel: ${channel.name}`)
           toast({
             title: "Channel Error",
@@ -739,6 +890,50 @@ export default function IPTVPlayer() {
     },
     [isOnline, toast],
   )
+
+  // Retry mechanism for failed channels
+  const retryChannel = useCallback(() => {
+    if (!selectedChannel || !videoRef.current) {
+      console.warn('Cannot retry: no channel selected or video element not available')
+      return
+    }
+    
+    // Clear any existing error state
+    setVideoError(null)
+    setIsVideoLoading(true)
+    
+    // Try different approaches for IPTV streams
+    const video = videoRef.current
+    
+    // Clear any existing sources
+    while (video.firstChild) {
+      video.removeChild(video.firstChild)
+    }
+    
+    // Try with different user agent simulation for some streams
+    const formats = [
+      { type: 'application/x-mpegURL', ext: '.m3u8' },
+      { type: 'application/vnd.apple.mpegurl', ext: '.m3u8' },
+      { type: 'video/mp4', ext: '.mp4' },
+      { type: 'video/webm', ext: '.webm' },
+      { type: 'video/ogg', ext: '.ogv' },
+      { type: 'application/octet-stream', ext: '' } // Generic fallback
+    ]
+    
+    formats.forEach(format => {
+      const source = document.createElement('source')
+      source.src = selectedChannel?.url || ''
+      source.type = format.type
+      video.appendChild(source)
+    })
+    
+    video.load()
+    
+    toast({
+      title: "Retrying Channel",
+      description: `Attempting to load ${selectedChannel?.name || 'Channel'} with different formats...`,
+    })
+  }, [selectedChannel, toast])
 
   // Optimized video controls
   const togglePlay = useCallback(() => {
@@ -867,20 +1062,28 @@ export default function IPTVPlayer() {
       {/* Theme transition particles */}
       {showParticles && (
         <div className="fixed inset-0 pointer-events-none z-50">
-          {Array.from({ length: 50 }).map((_, i) => (
-            <div
-              key={i}
-              className={`absolute w-2 h-2 rounded-full ${
-                isDarkMode ? "bg-blue-400" : "bg-yellow-400"
-              } animate-float opacity-70`}
-              style={{
-                left: `${Math.random() * 100}%`,
-                top: `${Math.random() * 100}%`,
-                animationDelay: `${Math.random() * 2}s`,
-                animationDuration: `${2 + Math.random() * 2}s`,
-              }}
-            />
-          ))}
+          {Array.from({ length: 50 }).map((_, i) => {
+            // Use deterministic values for SSR consistency
+            const left = ((i * 13) % 100) + (i % 7) * 5
+            const top = ((i * 17) % 100) + (i % 11) * 3
+            const delay = (i % 5) * 0.3
+            const duration = 2 + (i % 4) * 0.4
+            
+            return (
+              <div
+                key={i}
+                className={`absolute w-2 h-2 rounded-full ${
+                  isDarkMode ? "bg-blue-400" : "bg-yellow-400"
+                } animate-float opacity-70`}
+                style={{
+                  left: `${left}%`,
+                  top: `${top}%`,
+                  animationDelay: `${delay}s`,
+                  animationDuration: `${duration}s`,
+                }}
+              />
+            )
+          })}
         </div>
       )}
 
@@ -923,10 +1126,12 @@ export default function IPTVPlayer() {
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
               <Input
+                id="channel-search"
                 placeholder="Search channels..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className={`pl-10 ${themeClasses.input}`}
+                aria-label="Search channels"
               />
             </div>
           </div>
@@ -937,13 +1142,21 @@ export default function IPTVPlayer() {
               <Label className="text-sm font-medium">Playlists</Label>
               <Dialog open={isAddPlaylistOpen} onOpenChange={setIsAddPlaylistOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="ghost" size="sm" className={`${themeClasses.button} ${themeClasses.buttonText}`}>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className={`${themeClasses.button} ${themeClasses.buttonText}`}
+                    aria-label="Add new playlist"
+                  >
                     <Plus className="w-4 h-4" />
                   </Button>
                 </DialogTrigger>
                 <DialogContent className={themeClasses.dialog}>
                   <DialogHeader>
                     <DialogTitle>Add Playlist</DialogTitle>
+                    <DialogDescription>
+                      Add a new playlist by providing a URL, pasting content, or uploading a file.
+                    </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4">
                     <div>
@@ -1046,9 +1259,11 @@ export default function IPTVPlayer() {
             </div>
 
             <select
+              id="playlist-select"
               value={selectedPlaylist || ""}
               onChange={(e) => setSelectedPlaylist(e.target.value || null)}
               className={`w-full p-2 rounded border ${themeClasses.input}`}
+              aria-label="Select a playlist"
             >
               <option value="">Select a playlist</option>
               {playlists.map((playlist) => (
@@ -1064,9 +1279,11 @@ export default function IPTVPlayer() {
             <div className="p-4 border-b border-gray-200 dark:border-gray-700">
               <Label className="text-sm font-medium mb-2 block">Categories</Label>
               <select
+                id="category-select"
                 value={selectedCategory || ""}
                 onChange={(e) => setSelectedCategory(e.target.value || null)}
                 className={`w-full p-2 rounded border ${themeClasses.input}`}
+                aria-label="Filter by category"
               >
                 <option value="">All Categories</option>
                 {categories.map((category) => (
@@ -1116,140 +1333,171 @@ export default function IPTVPlayer() {
         <div className="flex-1 flex flex-col">
           {/* Video Player */}
           <div className="flex-1 bg-black relative">
-            {selectedChannel ? (
-              <div className="relative w-full h-full">
-                {/* Video Error Display */}
-                {videoError && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-10">
-                    <div className="text-center text-white p-8">
-                      <AlertTriangle className="w-16 h-16 mx-auto mb-4 text-red-500" />
-                      <h3 className="text-xl font-semibold mb-2">Video Error</h3>
-                      <p className="text-gray-300 mb-4">{videoError}</p>
-                      <Button
-                        onClick={() => {
-                          setVideoError(null)
-                          if (selectedChannel) {
-                            handleChannelSelect(selectedChannel)
-                          }
-                        }}
-                        variant="outline"
-                        className="text-white border-white hover:bg-white hover:text-black"
-                      >
-                        Retry
-                      </Button>
-                    </div>
+            {/* Video Error Display */}
+            {videoError && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-10">
+                <div className="text-center text-white p-8 max-w-md">
+                  <AlertTriangle className="w-16 h-16 mx-auto mb-4 text-red-500" />
+                  <h3 className="text-xl font-semibold mb-2">Video Error</h3>
+                  <p className="text-gray-300 mb-4">{videoError}</p>
+                  
+                  {/* Helpful tips for IPTV issues */}
+                  <div className="text-left text-sm text-gray-400 mb-4 bg-gray-800 p-3 rounded">
+                    <p className="font-medium mb-2">Troubleshooting tips:</p>
+                    <ul className="space-y-1 text-xs">
+                      <li>• Try a different browser (Chrome, Firefox, Safari)</li>
+                      <li>• Check if the stream requires a VPN</li>
+                      <li>• Some streams may be geoblocked</li>
+                      <li>• Try refreshing the page and selecting again</li>
+                    </ul>
                   </div>
-                )}
-
-                {/* Loading Indicator */}
-                {isVideoLoading && !videoError && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-                    <div className="text-center text-white">
-                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mb-4 mx-auto"></div>
-                      <p>Loading {selectedChannel.name}...</p>
-                    </div>
+                  
+                  <div className="flex gap-2 justify-center">
+                    <Button
+                      onClick={retryChannel}
+                      variant="outline"
+                      className="text-white border-white hover:bg-white hover:text-black"
+                    >
+                      Retry
+                    </Button>
+                    <Button
+                      onClick={() => setVideoError(null)}
+                      variant="ghost"
+                      className="text-gray-300 hover:text-white"
+                    >
+                      Try Another Channel
+                    </Button>
                   </div>
-                )}
-
-                <video
-                  ref={videoRef}
-                  className="w-full h-full object-contain"
-                  controls={false}
-                  onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
-                  crossOrigin="anonymous"
-                  preload="metadata"
-                />
-
-                {/* Custom Controls Overlay */}
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
-                  {/* Progress Bar */}
-                  {duration > 0 && (
-                    <div className="mb-4">
-                      <input
-                        type="range"
-                        min="0"
-                        max={duration}
-                        value={currentTime}
-                        onChange={handleSeek}
-                        className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                      />
-                      <div className="flex justify-between text-xs text-gray-300 mt-1">
-                        <span>{formatTime(currentTime)}</span>
-                        <span>{formatTime(duration)}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between text-white">
-                    <div className="flex items-center gap-4">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={togglePlay}
-                        disabled={!!videoError}
-                        className="text-white hover:bg-white/20"
-                      >
-                        {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-                      </Button>
-
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={toggleMute}
-                          disabled={!!videoError}
-                          className="text-white hover:bg-white/20"
-                        >
-                          {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-                        </Button>
-                        <input
-                          type="range"
-                          min="0"
-                          max="1"
-                          step="0.1"
-                          value={volume}
-                          onChange={handleVolumeChange}
-                          disabled={!!videoError}
-                          className="w-20"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <div className="text-sm">
-                        {selectedChannel.name}
-                        {selectedChannel.group && <span className="text-gray-300 ml-2">• {selectedChannel.group}</span>}
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={toggleFullscreen}
-                        disabled={!!videoError}
-                        className="text-white hover:bg-white/20"
-                      >
-                        <Maximize className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-center h-full text-gray-500">
-                <div className="text-center">
-                  <Tv className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                  <p className="text-lg">Select a channel to start watching</p>
-                  <p className="text-sm">Choose from the playlist on the left</p>
-                  {playlists.length === 0 && (
-                    <div className="mt-4">
-                      <Button onClick={loadDefaultPlaylist} variant="outline">
-                        Load Demo Playlist
-                      </Button>
-                    </div>
-                  )}
                 </div>
               </div>
             )}
+
+            {/* Loading Indicator */}
+            {isVideoLoading && !videoError && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+                <div className="text-center text-white">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mb-4 mx-auto"></div>
+                  <p className="text-lg font-medium mb-2">Loading {selectedChannel?.name || 'Channel'}...</p>
+                  <p className="text-sm text-gray-300">Connecting to stream server</p>
+                  <p className="text-xs text-gray-400 mt-1">This may take a few seconds for live streams</p>
+                </div>
+              </div>
+            )}
+
+            <video
+              ref={videoRef}
+              className="w-full h-full object-contain"
+              controls={false}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onLoadStart={handleLoadStart}
+              onCanPlay={handleCanPlay}
+              onError={(e) => handleError(e as any)}
+              onTimeUpdate={handleTimeUpdate}
+              onDurationChange={handleDurationChange}
+              crossOrigin="anonymous"
+              preload="auto"
+              playsInline
+              muted={isMuted}
+              autoPlay
+              poster=""
+              disablePictureInPicture
+              disableRemotePlayback
+            >
+              {/* Add source elements for different stream formats */}
+              {selectedChannel && (
+                <>
+                  <source src={selectedChannel.url} type="application/x-mpegURL" />
+                  <source src={selectedChannel.url} type="video/mp4" />
+                  <source src={selectedChannel.url} type="video/webm" />
+                  <source src={selectedChannel.url} type="video/ogg" />
+                  <source src={selectedChannel.url} type="application/vnd.apple.mpegurl" />
+                </>
+              )}
+            </video>
+
+            {/* Custom Controls Overlay */}
+            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
+              {/* Progress Bar - Only show for non-live content */}
+              {duration > 0 && isFinite(duration) && (
+                <div className="mb-4">
+                  <input
+                    type="range"
+                    min="0"
+                    max={duration}
+                    value={currentTime}
+                    onChange={handleSeek}
+                    className="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-300 mt-1">
+                    <span>{formatTime(currentTime)}</span>
+                    <span>{formatTime(duration)}</span>
+                  </div>
+                </div>
+              )}
+              
+              {/* Live indicator for live streams */}
+              {duration === 0 && (
+                <div className="mb-4">
+                  <div className="flex items-center justify-center gap-2 text-xs text-red-400">
+                    <div className="w-2 h-2 bg-red-400 rounded-full animate-pulse"></div>
+                    <span>LIVE</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between text-white">
+                <div className="flex items-center gap-4">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={togglePlay}
+                    disabled={!!videoError}
+                    className="text-white hover:bg-white/20"
+                  >
+                    {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+                  </Button>
+
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={toggleMute}
+                      disabled={!!videoError}
+                      className="text-white hover:bg-white/20"
+                    >
+                      {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                    </Button>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={volume}
+                      onChange={handleVolumeChange}
+                      disabled={!!videoError}
+                      className="w-20"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="text-sm">
+                    {selectedChannel?.name || 'Unknown Channel'}
+                    {selectedChannel?.group && <span className="text-gray-300 ml-2">• {selectedChannel.group}</span>}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={toggleFullscreen}
+                    disabled={!!videoError}
+                    className="text-white hover:bg-white/20"
+                  >
+                    <Maximize className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1386,4 +1634,29 @@ export default function IPTVPlayer() {
       <input ref={fileInputRef} type="file" accept=".m3u,.m3u8" onChange={handleFileUpload} className="hidden" />
     </div>
   )
+}
+
+// Client-side only wrapper to prevent hydration issues
+export default function IPTVPlayerWrapper() {
+  const [isClient, setIsClient] = useState(false)
+
+  useEffect(() => {
+    setIsClient(true)
+  }, [])
+
+  if (!isClient) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 mx-auto mb-4 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center animate-pulse">
+            <Tv className="w-8 h-8 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Fr33 TV</h1>
+          <p className="text-gray-600 dark:text-gray-400">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return <IPTVPlayer />
 }

@@ -85,18 +85,26 @@ const Preloader = memo(function Preloader({ isLoading, onLoadingComplete }: Prel
         <div className="absolute inset-0 bg-gradient-to-r from-blue-600/20 to-purple-600/20 animate-pulse" />
 
         {/* Floating particles */}
-        {Array.from({ length: 20 }).map((_, i) => (
-          <div
-            key={i}
-            className="absolute w-2 h-2 bg-blue-400/30 rounded-full animate-float"
-            style={{
-              left: `${Math.random() * 100}%`,
-              top: `${Math.random() * 100}%`,
-              animationDelay: `${Math.random() * 3}s`,
-              animationDuration: `${3 + Math.random() * 2}s`,
-            }}
-          />
-        ))}
+        {Array.from({ length: 20 }).map((_, i) => {
+          // Use deterministic values for SSR consistency
+          const left = ((i * 7) % 100) + (i % 3) * 10
+          const top = ((i * 11) % 100) + (i % 5) * 8
+          const delay = (i % 4) * 0.5
+          const duration = 3 + (i % 3) * 0.5
+          
+          return (
+            <div
+              key={i}
+              className="absolute w-2 h-2 bg-blue-400/30 rounded-full animate-float"
+              style={{
+                left: `${left}%`,
+                top: `${top}%`,
+                animationDelay: `${delay}s`,
+                animationDuration: `${duration}s`,
+              }}
+            />
+          )
+        })}
       </div>
 
       {/* Main content */}

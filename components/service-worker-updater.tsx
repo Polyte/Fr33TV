@@ -10,30 +10,30 @@ const ServiceWorkerUpdater = () => {
   const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null)
 
   useEffect(() => {
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.ready.then((reg) => {
-        setRegistration(reg)
+    if (typeof window === 'undefined' || !("serviceWorker" in navigator)) return
 
-        // Listen for updates
-        reg.addEventListener("updatefound", () => {
-          const newWorker = reg.installing
-          if (newWorker) {
-            newWorker.addEventListener("statechange", () => {
-              if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-                setShowUpdatePrompt(true)
-              }
-            })
-          }
-        })
-      })
+    navigator.serviceWorker.ready.then((reg) => {
+      setRegistration(reg)
 
-      // Listen for messages from service worker
-      navigator.serviceWorker.addEventListener("message", (event) => {
-        if (event.data && event.data.type === "UPDATE_AVAILABLE") {
-          setShowUpdatePrompt(true)
+      // Listen for updates
+      reg.addEventListener("updatefound", () => {
+        const newWorker = reg.installing
+        if (newWorker) {
+          newWorker.addEventListener("statechange", () => {
+            if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+              setShowUpdatePrompt(true)
+            }
+          })
         }
       })
-    }
+    })
+
+    // Listen for messages from service worker
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data && event.data.type === "UPDATE_AVAILABLE") {
+        setShowUpdatePrompt(true)
+      }
+    })
   }, [])
 
   const handleUpdate = () => {
