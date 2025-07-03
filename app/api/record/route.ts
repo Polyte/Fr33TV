@@ -4,6 +4,9 @@ import path from 'path'
 import fs from 'fs'
 import ffmpegPath from 'ffmpeg-static'
 
+// Track ffmpeg processes by filename
+const ffmpegProcesses = new Map<string, ReturnType<typeof spawn>>()
+
 export async function POST(req: NextRequest) {
   try {
     const { url, filename } = await req.json()
@@ -17,30 +20,40 @@ export async function POST(req: NextRequest) {
     }
     const filePath = path.join(recordingsDir, filename)
 
-    // Spawn ffmpeg to record the stream
+    // Spawn ffmpeg to record
     const ffmpeg = spawn(ffmpegPath as string, [
-      '-y', // overwrite
       '-i', url,
       '-c', 'copy',
-      '-t', '00:10:00', // max 10 min for safety
-      filePath,
+      '-f', 'mp4',
+      filePath
     ])
+    ffmpegProcesses.set(filename, ffmpeg)
 
-    ffmpeg.on('error', (err) => {
-      console.error('ffmpeg error:', err)
+    ffmpeg.on('close', (code) => {
+      ffmpegProcesses.delete(filename)
     })
 
-    // Wait for ffmpeg to finish
-    await new Promise((resolve, reject) => {
-      ffmpeg.on('close', (code) => {
-        if (code === 0) resolve(true)
-        else reject(new Error('ffmpeg exited with code ' + code))
-      })
-    })
+    return NextResponse.json({ status: 'recording', file: `/recording/${filename}` })
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : 'Unknown error' }, { status: 500 })
+  }
+}
 
-    return NextResponse.json({ status: 'ok', filePath })
-  } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+export async function DELETE(req: NextRequest) {
+  try {
+    const { filename } = await req.json()
+    if (!filename) {
+      return NextResponse.json({ error: 'Missing filename' }, { status: 400 })
+    }
+    const ffmpeg = ffmpegProcesses.get(filename)
+    if (!ffmpeg) {
+      return NextResponse.json({ error: 'No recording in progress for this file' }, { status: 404 })
+    }
+    ffmpeg.kill('SIGINT')
+    ffmpegProcesses.delete(filename)
+    return NextResponse.json({ status: 'stopped' })
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : 'Unknown error' }, { status: 500 })
   }
 }
 

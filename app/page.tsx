@@ -361,6 +361,7 @@ function IPTVPlayer() {
   const [isRecording, setIsRecording] = useState(false)
   const [recordingError, setRecordingError] = useState<string | null>(null)
   const [recordingFile, setRecordingFile] = useState<string | null>(null)
+  const [recordingFilename, setRecordingFilename] = useState<string | null>(null)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -963,6 +964,7 @@ function IPTVPlayer() {
     setRecordingFile(null)
     const now = new Date()
     const filename = `${selectedChannel.name.replace(/[^a-zA-Z0-9_-]/g, '_')}-${now.toISOString().replace(/[:.]/g, '-')}.mp4`
+    setRecordingFilename(filename)
     try {
       // REMOVE this line and any related ffmpeg/child_process usage:
       // const ffmpeg = require('child_process').spawn(ffmpegPath, [
@@ -1012,6 +1014,27 @@ function IPTVPlayer() {
     }
     fetchChannels()
   }, [selectedPlaylist])
+
+  // Add the handleStopRecording function
+  const handleStopRecording = async () => {
+    if (!recordingFilename) return
+    setRecordingError(null)
+    try {
+      const res = await fetch('/api/record', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: recordingFilename })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to stop recording')
+      setIsRecording(false)
+      setRecordingFile(null)
+      setRecordingFilename(null)
+      toast({ title: 'Recording stopped', description: 'The recording has been stopped.' })
+    } catch (error) {
+      setRecordingError(error instanceof Error ? error.message : 'Failed to stop recording')
+    }
+  }
 
   // Render loading state
   if (isAppLoading) {
@@ -1533,6 +1556,17 @@ function IPTVPlayer() {
                     ) : (
                       <span className="flex items-center"><span className="w-2 h-2 bg-red-500 rounded-full mr-2"></span>Record</span>
                     )}
+                  </Button>
+                )}
+
+                {isRecording && recordingFilename && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleStopRecording}
+                    className="text-white hover:bg-red-600 ml-2"
+                  >
+                    Stop Recording
                   </Button>
                 )}
               </div>

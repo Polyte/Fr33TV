@@ -1,7 +1,7 @@
 {
-  "name": "Fr33 TV - IPTV Player",
+  "name": "Fr33 TV",
   "short_name": "Fr33 TV",
-  "description": "Professional IPTV streaming experience with offline support",
+  "description": "Professional Fr33 TV streaming experience with offline support",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#1e293b",
