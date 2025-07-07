@@ -1,7 +1,7 @@
 {
-  "name": "my-v0-project",
+  "name": "fr33tv",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "scripts": {
     "build": "next build",
     "dev": "next dev",
