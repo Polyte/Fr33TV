@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { ThemeProvider } from '@/components/theme-provider'
+import path from 'path'
 
 export const metadata: Metadata = {
   title: 'Fr33TV - Watch Free',
@@ -29,22 +30,4 @@ export default function RootLayout({
   )
 }
 
-const handleStopRecording = async () => {
-  if (!recordingFilename) return;
-  setRecordingError(null);
-  try {
-    const res = await fetch('/api/record', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename: recordingFilename })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to stop recording');
-    setIsRecording(false);
-    setRecordingFile(null);
-    setRecordingFilename(null);
-    toast({ title: 'Recording stopped', description: 'The recording has been stopped.' });
-  } catch (error) {
-    setRecordingError(error instanceof Error ? error.message : 'Failed to stop recording');
-  }
-};
+const recordingsDir = path.join(process.cwd(), 'public', 'recording')

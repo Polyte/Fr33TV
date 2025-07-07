@@ -62,6 +62,7 @@ interface Channel {
 interface Playlist {
   id: string
   name: string
+  url?: string
   channels: Channel[]
 }
 
@@ -587,7 +588,15 @@ function IPTVPlayer() {
       })
       if (!res.ok) throw new Error('Failed to add playlist')
       const newPlaylist = await res.json()
-      setPlaylists((prev) => [...prev, newPlaylist])
+      setPlaylists((prev) => [
+        ...prev,
+        {
+          ...newPlaylist,
+          channels: Array.isArray(newPlaylist.channels)
+            ? newPlaylist.channels
+            : [],
+        },
+      ])
       setPlaylistName("")
       setPlaylistUrl("")
       setIsAddPlaylistOpen(false)
@@ -958,23 +967,28 @@ function IPTVPlayer() {
 
   // Handle recording
   const handleRecord = async () => {
-    if (!selectedChannel) return
-    setIsRecording(true)
-    setRecordingError(null)
-    setRecordingFile(null)
-    const now = new Date()
-    const filename = `${selectedChannel.name.replace(/[^a-zA-Z0-9_-]/g, '_')}-${now.toISOString().replace(/[:.]/g, '-')}.mp4`
-    setRecordingFilename(filename)
+    if (!selectedChannel) return;
+    setIsRecording(true);
+    setRecordingError(null);
+    setRecordingFile(null);
+    const now = new Date();
+    const filename = `${selectedChannel.name.replace(/[^a-zA-Z0-9_-]/g, '_')}-${now.toISOString().replace(/[:.]/g, '-')}.mp4`;
+    setRecordingFilename(filename);
     try {
-      // REMOVE this line and any related ffmpeg/child_process usage:
-      // const ffmpeg = require('child_process').spawn(ffmpegPath, [
-      // ... existing code ...
+      const res = await fetch('/api/record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: selectedChannel.url, filename }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to start recording');
+      setRecordingFile(data.file); // Optionally store the file path
+      // Optionally update recordings list here
     } catch (error) {
-      console.error("Error recording:", error)
-      setRecordingError("An error occurred while recording")
-      setIsRecording(false)
+      setRecordingError(error instanceof Error ? error.message : 'Failed to start recording');
+      setIsRecording(false);
     }
-  }
+  };
 
   // Refactor playlist deletion to call DELETE /api/playlists?id=...
   const handleDeletePlaylist = useCallback(async (id: string) => {
@@ -1282,9 +1296,9 @@ function IPTVPlayer() {
               aria-label="Select a playlist"
             >
               <option value="">Select a playlist</option>
-              {playlists.map((playlist) => (
-                <option key={playlist.id} value={playlist.id}>
-                  {playlist.name} ({playlist.channels.length} channels)
+              {playlists.map((playlist, idx) => (
+                <option key={playlist.id || idx} value={playlist.id || idx}>
+                  {playlist.name} ({playlist.channels ? playlist.channels.length : 0} channels)
                 </option>
               ))}
             </select>
@@ -1447,8 +1461,6 @@ function IPTVPlayer() {
               muted={isMuted}
               autoPlay
               poster=""
-              disablePictureInPicture
-              disableRemotePlayback
             >
               {/* Add source elements for different stream formats */}
               {selectedChannel && (
@@ -1540,6 +1552,29 @@ function IPTVPlayer() {
                     className="text-white hover:bg-white/20"
                   >
                     <Maximize className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      if (videoRef.current) {
+                        // @ts-ignore
+                        if (document.pictureInPictureElement) {
+                          // @ts-ignore
+                          document.exitPictureInPicture();
+                        } else {
+                          // @ts-ignore
+                          videoRef.current.requestPictureInPicture();
+                        }
+                      }
+                    }}
+                    className="text-white hover:bg-white/20"
+                    aria-label="Picture in Picture"
+                  >
+                    <svg width="20" height="20" fill="none" viewBox="0 0 24 24">
+                      <rect x="3" y="3" width="18" height="14" rx="2" fill="currentColor" opacity="0.2"/>
+                      <rect x="13" y="13" width="8" height="6" rx="1" fill="currentColor"/>
+                    </svg>
                   </Button>
                 </div>
 

@@ -1,10 +1,10 @@
 "use client"
 
-import { memo, useMemo, useCallback } from "react"
+import { memo, useMemo, useCallback, useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
-import { Play, Wifi, WifiOff, AlertTriangle } from "lucide-react"
+import { Play, Wifi, WifiOff, AlertTriangle, Star } from "lucide-react"
 import { VirtualList } from "@/components/virtual-list"
 
 interface Channel {
@@ -31,11 +31,15 @@ const ChannelItem = memo(function ChannelItem({
   isSelected,
   onSelect,
   isDarkMode,
+  isFavourite,
+  onToggleFavourite,
 }: {
   channel: Channel
   isSelected: boolean
   onSelect: (channel: Channel) => void
   isDarkMode?: boolean
+  isFavourite?: boolean
+  onToggleFavourite?: (channel: Channel) => void
 }) {
   const handleClick = useCallback(() => {
     onSelect(channel)
@@ -95,6 +99,24 @@ const ChannelItem = memo(function ChannelItem({
           )}
         </div>
 
+        {/* Favourite Button */}
+        {onToggleFavourite && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="flex-shrink-0 mr-1"
+            tabIndex={-1}
+            onClick={e => {
+              e.stopPropagation()
+              onToggleFavourite(channel)
+            }}
+            aria-label={isFavourite ? "Remove from favourites" : "Add to favourites"}
+          >
+            <Star className={`w-4 h-4 ${isFavourite ? "text-yellow-400 fill-yellow-400" : "text-gray-400"}`} fill={isFavourite ? "#facc15" : "none"} />
+          </Button>
+        )}
+
         {/* Play Button */}
         <Button
           variant={isSelected ? "secondary" : "ghost"}
@@ -117,29 +139,62 @@ export const ChannelList = memo(function ChannelList({
   isDarkMode,
   containerHeight = 400,
 }: ChannelListProps) {
+  // Favourites state
+  const [favourites, setFavourites] = useState<string[]>([])
+
+  // Load favourites from localStorage
+  useEffect(() => {
+    const favs = localStorage.getItem("favouriteChannels")
+    if (favs) setFavourites(JSON.parse(favs))
+  }, [])
+
+  // Save favourites to localStorage
+  useEffect(() => {
+    localStorage.setItem("favouriteChannels", JSON.stringify(favourites))
+  }, [favourites])
+
+  // Toggle favourite
+  const handleToggleFavourite = useCallback((channel: Channel) => {
+    setFavourites(prev => {
+      if (prev.includes(channel.url)) {
+        return prev.filter(url => url !== channel.url)
+      } else {
+        return [...prev, channel.url]
+      }
+    })
+  }, [])
+
   // Memoized filtered and sorted channels
   const processedChannels = useMemo(() => {
     const filtered = [...channels]
-
     // Sort by working status first, then by name
     filtered.sort((a, b) => {
       // Working channels first
       if (a.isWorking && !b.isWorking) return -1
       if (!a.isWorking && b.isWorking) return 1
-
       // Then by name
       return (a.name || '').localeCompare(b.name || '')
     })
-
     return filtered
   }, [channels])
+
+  // Favourites at the top
+  const favouriteChannels = useMemo(() =>
+    processedChannels.filter(c => favourites.includes(c.url)),
+    [processedChannels, favourites]
+  )
+  const nonFavouriteChannels = useMemo(() =>
+    processedChannels.filter(c => !favourites.includes(c.url)),
+    [processedChannels, favourites]
+  )
+  const allChannels = [...favouriteChannels, ...nonFavouriteChannels]
 
   // Render item function for virtual list
   const renderItem = useCallback(
     (index: number) => {
-      const channel = processedChannels[index]
+      const channel = allChannels[index]
       const isSelected = selectedChannel?.url === channel.url
-
+      const isFavourite = favourites.includes(channel.url)
       return (
         <ChannelItem
           key={`${channel.url}-${index}`}
@@ -147,13 +202,15 @@ export const ChannelList = memo(function ChannelList({
           isSelected={isSelected}
           onSelect={onChannelSelect}
           isDarkMode={isDarkMode}
+          isFavourite={isFavourite}
+          onToggleFavourite={handleToggleFavourite}
         />
       )
     },
-    [processedChannels, selectedChannel, onChannelSelect, isDarkMode],
+    [allChannels, selectedChannel, onChannelSelect, isDarkMode, favourites, handleToggleFavourite],
   )
 
-  if (processedChannels.length === 0) {
+  if (allChannels.length === 0) {
     return (
       <div className="p-4 text-center text-gray-500">
         <WifiOff className="w-12 h-12 mx-auto mb-2 opacity-50" />
@@ -164,11 +221,11 @@ export const ChannelList = memo(function ChannelList({
   }
 
   // Use virtual scrolling for large lists
-  if (processedChannels.length > 50) {
+  if (allChannels.length > 50) {
     return (
       <VirtualList
         height={containerHeight}
-        itemCount={processedChannels.length}
+        itemCount={allChannels.length}
         itemSize={80}
         renderItem={renderItem}
         className="w-full"
@@ -180,13 +237,32 @@ export const ChannelList = memo(function ChannelList({
   return (
     <ScrollArea className="h-full">
       <div className="space-y-0">
-        {processedChannels.map((channel, index) => (
+        {favouriteChannels.length > 0 && (
+          <>
+            <div className="px-4 pt-3 pb-1 text-xs font-semibold text-yellow-600 dark:text-yellow-400">Favourites</div>
+            {favouriteChannels.map((channel, index) => (
+              <ChannelItem
+                key={`fav-${channel.url}-${index}`}
+                channel={channel}
+                isSelected={selectedChannel?.url === channel.url}
+                onSelect={onChannelSelect}
+                isDarkMode={isDarkMode}
+                isFavourite={true}
+                onToggleFavourite={handleToggleFavourite}
+              />
+            ))}
+            <div className="my-2 border-t border-dashed border-gray-300 dark:border-gray-700" />
+          </>
+        )}
+        {nonFavouriteChannels.map((channel, index) => (
           <ChannelItem
-            key={`${channel.url}-${index}`}
+            key={`nonfav-${channel.url}-${index}`}
             channel={channel}
             isSelected={selectedChannel?.url === channel.url}
             onSelect={onChannelSelect}
             isDarkMode={isDarkMode}
+            isFavourite={false}
+            onToggleFavourite={handleToggleFavourite}
           />
         ))}
       </div>

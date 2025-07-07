@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { spawn } from 'child_process'
 import path from 'path'
 import fs from 'fs'
-import ffmpegPath from 'ffmpeg-static'
+import ffmpegStatic from 'ffmpeg-static'
 
 // Track ffmpeg processes by filename
 const ffmpegProcesses = new Map<string, ReturnType<typeof spawn>>()
+
+// Use ffmpeg-static if available, otherwise fallback to system ffmpeg
+const ffmpegPath = ffmpegStatic || 'ffmpeg'
 
 export async function POST(req: NextRequest) {
   try {
