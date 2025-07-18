@@ -155,6 +155,10 @@ const Preloader = memo(function Preloader({ isLoading, onLoadingComplete }: Prel
             <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
             <span>Offline Mode</span>
           </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+            <span>by 369Kxng</span>
+          </div>
         </div>
       </div>
     </div>
