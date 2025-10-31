@@ -136,88 +136,113 @@ const DEMO_SOURCES = [
 
 // Optimized M3U parser with Web Workers support
 const parseM3UOptimized = (content: string, onProgress?: (progress: number) => void): Promise<Channel[]> => {
-  return new Promise((resolve) => {
-    // Use Web Worker if available for large playlists
-    if (content.length > 100000 && typeof Worker !== "undefined" && typeof window !== "undefined") {
-      const workerCode = `
-        self.onmessage = function(e) {
-          const { content } = e.data;
-          const lines = content.split('\\n').map(line => line.trim()).filter(line => line);
-          const channels = [];
-          const categorySet = new Set();
-          
-          for (let i = 0; i < lines.length; i++) {
-            if (lines[i].startsWith('#EXTINF:')) {
-              const extinf = lines[i];
-              const url = lines[i + 1];
+  return new Promise((resolve, reject) => {
+    try {
+      console.log("[v0] Starting M3U parsing, content length:", content.length)
+
+      const normalizedContent = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+      const lines = normalizedContent
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line)
+
+      console.log("[v0] Total lines to process:", lines.length)
+
+      // Use Web Worker for large playlists (>50KB or >500 lines)
+      if ((content.length > 50000 || lines.length > 500) && typeof Worker !== "undefined") {
+        console.log("[v0] Using Web Worker for parsing")
+
+        const workerCode = `
+          self.onmessage = function(e) {
+            const { content } = e.data;
+            const lines = content.split('\\n').map(line => line.trim()).filter(line => line);
+            const channels = [];
+            const categorySet = new Set();
+            
+            console.log('[v0 Worker] Processing', lines.length, 'lines');
+            
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i];
               
-              if (url && !url.startsWith('#')) {
-                const nameMatch = extinf.match(/,(.+)$/);
-                const name = nameMatch ? nameMatch[1].trim() : 'Unknown Channel';
+              // Look for EXTINF lines
+              if (line.startsWith('#EXTINF:')) {
+                const extinf = line;
+                let url = '';
                 
-                const groupMatch = extinf.match(/group-title="([^"]+)"/i);
-                const group = groupMatch ? groupMatch[1] : 'Uncategorized';
+                // Find the next non-comment line as the URL
+                for (let j = i + 1; j < lines.length; j++) {
+                  if (!lines[j].startsWith('#')) {
+                    url = lines[j];
+                    break;
+                  }
+                }
                 
-                const logoMatch = extinf.match(/tvg-logo="([^"]+)"/i);
-                const logo = logoMatch ? logoMatch[1] : undefined;
-                
-                channels.push({ name, url, group, logo });
-                categorySet.add(group);
-                
-                if (channels.length % 100 === 0) {
-                  self.postMessage({ type: 'progress', progress: (i / lines.length) * 100 });
+                if (url && (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('rtmp://') || url.startsWith('rtsp://'))) {
+                  // Extract channel name (after the comma)
+                  const nameMatch = extinf.match(/,(.+)$/);
+                  const name = nameMatch ? nameMatch[1].trim() : 'Unknown Channel';
+                  
+                  // Extract group/category
+                  const groupMatch = extinf.match(/group-title="([^"]+)"/i);
+                  const group = groupMatch ? groupMatch[1].trim() : 'Uncategorized';
+                  
+                  // Extract logo
+                  const logoMatch = extinf.match(/tvg-logo="([^"]+)"/i);
+                  const logo = logoMatch ? logoMatch[1] : undefined;
+                  
+                  channels.push({ name, url, group, logo });
+                  categorySet.add(group);
+                  
+                  // Report progress every 50 channels
+                  if (channels.length % 50 === 0) {
+                    self.postMessage({ type: 'progress', progress: (i / lines.length) * 100 });
+                  }
                 }
               }
             }
-          }
-          
-          self.postMessage({ 
-            type: 'complete', 
-            channels, 
-            categories: Array.from(categorySet).sort() 
-          });
-        };
-      `;
+            
+            console.log('[v0 Worker] Parsed', channels.length, 'channels');
+            self.postMessage({ 
+              type: 'complete', 
+              channels, 
+              categories: Array.from(categorySet).sort() 
+            });
+          };
+        `
 
       const blob = new Blob([workerCode], { type: "application/javascript" });
       const workerUrl = URL.createObjectURL(blob);
       const worker = new Worker(workerUrl);
 
-      worker.onmessage = (e) => {
-        const { type, channels, progress } = e.data
-        if (type === "progress" && onProgress) {
-          onProgress(progress)
-        } else if (type === "complete") {
-          worker.terminate()
-          URL.revokeObjectURL(workerUrl)
-          resolve(channels)
+        worker.onmessage = (e) => {
+          const { type, channels, progress } = e.data
+          if (type === "progress" && onProgress) {
+            onProgress(progress)
+          } else if (type === "complete") {
+            console.log("[v0] Worker completed, channels:", channels.length)
+            worker.terminate()
+            URL.revokeObjectURL(blob)
+            resolve(channels)
+          }
         }
+
+        worker.onerror = (error) => {
+          console.error("[v0] Worker error:", error)
+          worker.terminate()
+          // Fallback to main thread
+          parseMainThread()
+        }
+
+        worker.postMessage({ content: normalizedContent })
+      } else {
+        // Parse on main thread for smaller playlists
+        parseMainThread()
       }
 
-      worker.onerror = (error) => {
-        console.error('Web Worker error:', error);
-        worker.terminate()
-        URL.revokeObjectURL(workerUrl)
-        // Fallback to main thread parsing
-        resolve(parseM3UInMainThread(content, onProgress))
-      }
-
-      worker.postMessage({ content })
-    } else {
-      // Fallback to main thread parsing
-      resolve(parseM3UInMainThread(content, onProgress))
-    }
-  })
-}
-
-// Main thread M3U parsing function
-const parseM3UInMainThread = (content: string, onProgress?: (progress: number) => void): Channel[] => {
-  const lines = content
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line)
-  const channels: Channel[] = []
-  let processed = 0
+      function parseMainThread() {
+        console.log("[v0] Using main thread for parsing")
+        const channels: Channel[] = []
+        const categorySet = new Set<string>()
 
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].startsWith("#EXTINF:")) {
@@ -236,16 +261,29 @@ const parseM3UInMainThread = (content: string, onProgress?: (progress: number) =
 
         channels.push({ name, url, group, logo })
 
-        processed++
-        if (onProgress && processed % 100 === 0) {
-          onProgress((processed / (lines.length / 2)) * 100)
+              // Report progress every 50 channels
+              if (onProgress && channels.length % 50 === 0) {
+                onProgress((i / lines.length) * 100)
+              }
+            }
+          }
+        }
+
+        console.log("[v0] Main thread parsed", channels.length, "channels")
+
+        if (onProgress) onProgress(100)
+
+        if (channels.length === 0) {
+          reject(new Error("No valid channels found in the playlist. Please check the M3U format."))
+        } else {
+          resolve(channels)
         }
       }
+    } catch (error) {
+      console.error("[v0] Error parsing M3U:", error)
+      reject(error)
     }
-  }
-
-  if (onProgress) onProgress(100)
-  return channels
+  })
 }
 
 // Dummy parseXMLTV function (replace with actual implementation)
@@ -581,28 +619,92 @@ function IPTVPlayer() {
     setIsLoadingPlaylist(true)
     setLoadingProgress(0)
     try {
-      const res = await fetch('/api/playlists', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: crypto.randomUUID(), name: playlistName, url: playlistUrl, channels: '[]' }),
-      })
-      if (!res.ok) throw new Error('Failed to add playlist')
-      const newPlaylist = await res.json()
-      setPlaylists((prev) => [
-        ...prev,
-        {
-          ...newPlaylist,
-          channels: Array.isArray(newPlaylist.channels)
-            ? newPlaylist.channels
-            : [],
+      console.log("[v0] Adding playlist from URL:", playlistUrl)
+
+      // Check cache first
+      const cacheKey = `playlist-${playlistUrl}`
+      const cachedChannels = getCached(cacheKey)
+
+      if (cachedChannels && Array.isArray(cachedChannels) && cachedChannels.length > 0) {
+        console.log("[v0] Using cached playlist data")
+        const newPlaylist: Playlist = {
+          id: Date.now().toString(),
+          name: playlistName,
+          channels: cachedChannels,
+        }
+        setPlaylists((prev) => [...prev, newPlaylist])
+
+        // Update categories
+        const categorySet = new Set(cachedChannels.map((ch) => ch.group).filter(Boolean))
+        setCategories(Array.from(categorySet).sort())
+
+        setPlaylistName("")
+        setPlaylistUrl("")
+        setIsAddPlaylistOpen(false)
+        setIsLoadingPlaylist(false)
+        toast({
+          title: "Playlist Added",
+          description: `${playlistName} has been added with ${cachedChannels.length} channels (from cache).`,
+        })
+        return
+      }
+
+      // Use server-side proxy to bypass CORS
+      console.log("[v0] Fetching playlist via API")
+      const response = await fetch("/api/fetch-playlist", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      ])
+        body: JSON.stringify({ url: playlistUrl }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const { content } = await response.json()
+      console.log("[v0] Received playlist content, length:", content.length)
+
+      // Parse the M3U content
+      const channels = await parseM3UOptimized(content, (progress) => {
+        setLoadingProgress(progress)
+      })
+
+      console.log("[v0] Parsed channels:", channels.length)
+
+      if (channels.length === 0) {
+        throw new Error("No valid channels found in playlist")
+      }
+
+      // Cache the channels
+      setCached(cacheKey, channels)
+
+      const newPlaylist: Playlist = {
+        id: Date.now().toString(),
+        name: playlistName,
+        channels,
+      }
+
+      setPlaylists((prev) => [...prev, newPlaylist])
+
+      // Update categories
+      const categorySet = new Set(channels.map((ch) => ch.group).filter(Boolean))
+      setCategories(Array.from(categorySet).sort())
+
       setPlaylistName("")
       setPlaylistUrl("")
       setIsAddPlaylistOpen(false)
       toast({ title: "Playlist Added", description: `${playlistName} has been added successfully.` })
     } catch (error) {
-      toast({ title: "Error Adding Playlist", description: error instanceof Error ? error.message : "Failed to add playlist.", variant: "destructive" })
+      console.error("[v0] Error adding playlist:", error)
+      toast({
+        title: "Error Adding Playlist",
+        description:
+          error instanceof Error ? error.message : "Failed to add playlist. Please check the URL and try again.",
+        variant: "destructive",
+      })
     } finally {
       setIsLoadingPlaylist(false)
       setLoadingProgress(0)
@@ -611,10 +713,25 @@ function IPTVPlayer() {
 
   // Optimized add playlist from content
   const addPlaylistFromContent = useCallback(async () => {
-    if (!playlistName || !playlistContent) return
+    if (!playlistName || !playlistContent) {
+      toast({
+        title: "Missing Information",
+        description: "Please provide both playlist name and content.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsLoadingPlaylist(true)
+    setLoadingProgress(0)
 
     try {
-      const channels = await parseM3UOptimized(playlistContent)
+      console.log("[v0] Parsing playlist from content")
+      const channels = await parseM3UOptimized(playlistContent, (progress) => {
+        setLoadingProgress(progress)
+      })
+
+      console.log("[v0] Parsed channels:", channels.length)
 
       if (channels.length === 0) {
         throw new Error("No valid channels found in playlist content")
@@ -641,7 +758,7 @@ function IPTVPlayer() {
         description: `${playlistName} has been added with ${channels.length} channels.`,
       })
     } catch (error) {
-      console.error("Error parsing playlist:", error)
+      console.error("[v0] Error parsing playlist:", error)
       toast({
         title: "Error Adding Playlist",
         description: "Failed to parse playlist content. Please check the format.",
@@ -704,6 +821,7 @@ function IPTVPlayer() {
   // Optimized channel selection with error handling
   const handleChannelSelect = useCallback(
     async (channel: Channel) => {
+      console.log("[v0] Selecting channel:", channel.name)
       setSelectedChannel(channel)
       setVideoError(null)
       setIsVideoLoading(true)
@@ -720,81 +838,109 @@ function IPTVPlayer() {
           // Set the video source immediately for better UX
           // For IPTV streams, we need to handle different formats
           const video = videoRef.current
-          
-          // Clear any existing sources
-          while (video.firstChild) {
-            video.removeChild(video.firstChild)
-          }
-          
-          // Add source elements for different stream formats
-          const formats = [
-            { type: 'application/x-mpegURL', ext: '.m3u8' },
-            { type: 'application/vnd.apple.mpegurl', ext: '.m3u8' },
-            { type: 'video/mp4', ext: '.mp4' },
-            { type: 'video/webm', ext: '.webm' },
-            { type: 'video/ogg', ext: '.ogv' },
-            { type: 'application/octet-stream', ext: '' } // Generic fallback
-          ]
-          
-          formats.forEach(format => {
-            const source = document.createElement('source')
-            source.src = channel.url
-            source.type = format.type
-            video.appendChild(source)
-          })
-          
-          video.load()
 
-          // For IPTV streams, we need to handle them differently than regular videos
-          // Most IPTV streams are live and don't have a duration
-          videoRef.current.addEventListener('loadedmetadata', () => {
-            // For live streams, duration is usually Infinity
-            if (videoRef.current && !isFinite(videoRef.current.duration)) {
-              setDuration(0) // Hide progress bar for live content
-            }
-          }, { once: true })
+          // Check if the URL is an HLS stream (.m3u8)
+          if (channel.url.includes(".m3u8")) {
+            const proxyUrl = `/api/stream-proxy?url=${encodeURIComponent(channel.url)}`
+            console.log("[v0] Using proxy URL for HLS stream:", proxyUrl)
 
-          // Validate source in background (non-blocking)
-          if (isOnline) {
-            validateVideoSource(channel.url).then((isValid) => {
-              if (!isValid) {
-                console.warn(`Channel ${channel.name} may not be accessible`)
-                // Don't show error toast for validation failures, let the video element handle it
-              }
-            }).catch((error) => {
-              console.warn(`Validation failed for ${channel.name}:`, error)
-            })
-            
-            // Try to detect stream format and add appropriate headers
-            fetch(channel.url, { 
-              method: 'HEAD',
-              signal: AbortSignal.timeout(3000),
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-              }
-            }).then(response => {
-              const contentType = response.headers.get('content-type')
-              if (contentType) {
-                console.log(`Stream content type: ${contentType}`)
-                // Update source type if needed
-                if (videoRef.current && videoRef.current.children.length > 0) {
-                  const firstSource = videoRef.current.children[0] as HTMLSourceElement
-                  if (firstSource && !contentType.includes(firstSource.type)) {
-                    firstSource.type = contentType
+            // Use HLS.js for HLS streams
+            if (typeof window !== "undefined" && "Hls" in window) {
+              const Hls = (window as any).Hls
+
+              if (Hls.isSupported()) {
+                // Destroy existing HLS instance if any
+                if ((video as any).hls) {
+                  ;(video as any).hls.destroy()
+                }
+
+                const hls = new Hls({
+                  enableWorker: true,
+                  lowLatencyMode: true,
+                  backBufferLength: 90,
+                  xhrSetup: (xhr: XMLHttpRequest, url: string) => {
+                    xhr.withCredentials = false
+                  },
+                })
+
+                hls.loadSource(proxyUrl)
+                hls.attachMedia(video)
+
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                  console.log("[v0] HLS manifest parsed successfully, attempting to play")
+                  video.play().catch((error) => {
+                    console.error("[v0] HLS play error:", error)
+                    setVideoError(`Failed to play HLS stream: ${error.message}`)
+                  })
+                })
+
+                hls.on(Hls.Events.ERROR, (event, data) => {
+                  console.error("[v0] HLS error:", data)
+                  if (data.fatal) {
+                    switch (data.type) {
+                      case Hls.ErrorTypes.NETWORK_ERROR:
+                        console.error("[v0] Fatal network error, attempting recovery")
+                        setVideoError("Network error loading stream. Retrying...")
+                        hls.startLoad()
+                        break
+                      case Hls.ErrorTypes.MEDIA_ERROR:
+                        console.error("[v0] Fatal media error, attempting recovery")
+                        setVideoError("Media error, attempting recovery...")
+                        hls.recoverMediaError()
+                        break
+                      default:
+                        console.error("[v0] Fatal error, cannot recover")
+                        setVideoError("Fatal error loading stream. The stream may be unavailable.")
+                        hls.destroy()
+                        break
+                    }
                   }
-                }
+                })
+
+                // Store HLS instance on video element for cleanup
+                ;(video as any).hls = hls
+              } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+                console.log("[v0] Using native HLS support with proxy")
+                video.src = proxyUrl
+                video.load()
+                video.play().catch((error) => {
+                  console.error("[v0] Native HLS play error:", error)
+                  setVideoError(`Failed to play stream: ${error.message}`)
+                })
+              } else {
+                setVideoError("HLS streams are not supported in this browser")
               }
-            }).catch(error => {
-              console.warn(`Could not detect stream format:`, error)
-              // Try with a different user agent as fallback
-              fetch(channel.url, { 
-                method: 'HEAD',
-                signal: AbortSignal.timeout(2000),
-                headers: {
-                  'User-Agent': 'VLC/3.0.0 LibVLC/3.0.0'
-                }
-              }).catch(error2 => {
-                console.warn(`Second attempt failed:`, error2)
+            } else {
+              // HLS.js not loaded yet, load it dynamically
+              console.log("[v0] Loading HLS.js library")
+              const script = document.createElement("script")
+              script.src = "https://cdn.jsdelivr.net/npm/hls.js@latest"
+              script.onload = () => {
+                console.log("[v0] HLS.js loaded, retrying channel selection")
+                handleChannelSelect(channel)
+              }
+              script.onerror = () => {
+                setVideoError("Failed to load HLS player library")
+              }
+              document.head.appendChild(script)
+              return
+            }
+          } else {
+            // Regular video source (MP4, WebM, etc.)
+            // Destroy HLS instance if exists
+            if ((video as any).hls) {
+              ;(video as any).hls.destroy()
+              delete (video as any).hls
+            }
+
+            video.src = channel.url
+            video.load()
+
+            // Attempt to play after a short delay to ensure load has started
+            setTimeout(() => {
+              video.play().catch((error) => {
+                console.error("[v0] Play error:", error)
+                setVideoError(`Failed to play video: ${error.message}`)
               })
             })
           }
@@ -804,7 +950,7 @@ function IPTVPlayer() {
             description: `Now playing: ${channel.name}`,
           })
         } catch (error) {
-          console.error("Error setting video source:", error)
+          console.error("[v0] Error loading channel:", error)
           setVideoError(`Failed to load channel: ${channel.name}`)
           toast({
             title: "Channel Error",
@@ -965,90 +1111,13 @@ function IPTVPlayer() {
     })
   }, [toast])
 
-  // Handle recording
-  const handleRecord = async () => {
-    if (!selectedChannel) return;
-    setIsRecording(true);
-    setRecordingError(null);
-    setRecordingFile(null);
-    const now = new Date();
-    const filename = `${selectedChannel.name.replace(/[^a-zA-Z0-9_-]/g, '_')}-${now.toISOString().replace(/[:.]/g, '-')}.mp4`;
-    setRecordingFilename(filename);
-    try {
-      const res = await fetch('/api/record', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: selectedChannel.url, filename }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to start recording');
-      setRecordingFile(data.file); // Optionally store the file path
-      // Optionally update recordings list here
-    } catch (error) {
-      setRecordingError(error instanceof Error ? error.message : 'Failed to start recording');
-      setIsRecording(false);
-    }
-  };
-
-  // Refactor playlist deletion to call DELETE /api/playlists?id=...
-  const handleDeletePlaylist = useCallback(async (id: string) => {
-    try {
-      const res = await fetch(`/api/playlists?id=${id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error('Failed to delete playlist')
-      setPlaylists((prev) => prev.filter((p) => p.id !== id))
-      if (selectedPlaylist === id) setSelectedPlaylist(null)
-      toast({ title: "Playlist Deleted", description: "Playlist has been removed." })
-    } catch (error) {
-      toast({ title: "Error Deleting Playlist", description: error instanceof Error ? error.message : "Failed to delete playlist.", variant: "destructive" })
-    }
-  }, [selectedPlaylist, toast])
-
-  // When a playlist is selected, fetch and parse its M3U from playlist.url
   useEffect(() => {
-    const fetchChannels = async () => {
-      if (!selectedPlaylist) return
-      const playlist = playlists.find((p) => p.id === selectedPlaylist)
-      if (!playlist || !playlist.url) return
-      setIsLoadingPlaylist(true)
-      try {
-        const res = await fetch(playlist.url)
-        if (!res.ok) throw new Error('Failed to fetch playlist content')
-        const content = await res.text()
-        const channels = await parseM3UOptimized(content, setLoadingProgress)
-        setPlaylists((prev) => prev.map((p) => p.id === playlist.id ? { ...p, channels } : p))
-        // Update categories
-        const categorySet = new Set(channels.map((ch) => ch.group))
-        setCategories(Array.from(categorySet).filter((group): group is string => typeof group === "string").sort())
-      } catch (error) {
-        toast({ title: "Error Loading Playlist", description: error instanceof Error ? error.message : "Failed to load playlist.", variant: "destructive" })
-      } finally {
-        setIsLoadingPlaylist(false)
-        setLoadingProgress(0)
+    return () => {
+      if (videoRef.current && (videoRef.current as any).hls) {
+        ;(videoRef.current as any).hls.destroy()
       }
     }
-    fetchChannels()
-  }, [selectedPlaylist])
-
-  // Add the handleStopRecording function
-  const handleStopRecording = async () => {
-    if (!recordingFilename) return
-    setRecordingError(null)
-    try {
-      const res = await fetch('/api/record', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: recordingFilename })
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to stop recording')
-      setIsRecording(false)
-      setRecordingFile(null)
-      setRecordingFilename(null)
-      toast({ title: 'Recording stopped', description: 'The recording has been stopped.' })
-    } catch (error) {
-      setRecordingError(error instanceof Error ? error.message : 'Failed to stop recording')
-    }
-  }
+  }, [])
 
   // Render loading state
   if (isAppLoading) {

@@ -1,12 +1,21 @@
 "use client"
 
-import { useState, useEffect, memo } from "react"
+import {  } from 'react';
+
+import { ReactNode , useState, useEffect, memo } from "react"
 import { Tv, Wifi, Play, Settings, Zap } from "lucide-react"
+import dynamic from 'next/dynamic'
 
 interface PreloaderProps {
   isLoading: boolean
   onLoadingComplete: () => void
 }
+
+ interface NoSSRProps {
+  children: ReactNode;
+  fallback?: ReactNode;
+}
+ 
 
 const Preloader = memo(function Preloader({ isLoading, onLoadingComplete }: PreloaderProps) {
   const [progress, setProgress] = useState(0)
@@ -21,7 +30,10 @@ const Preloader = memo(function Preloader({ isLoading, onLoadingComplete }: Prel
     { icon: Zap, label: "Optimizing performance", duration: 300 },
   ]
 
+    const [isMounted, setIsMounted] = useState(false);
+
   useEffect(() => {
+     setIsMounted(true);
     if (!isLoading) return
 
     const totalDuration = 0
@@ -77,8 +89,8 @@ const Preloader = memo(function Preloader({ isLoading, onLoadingComplete }: Prel
   if (!isVisible) return null
 
   const CurrentIcon = stages[currentStage]?.icon || Tv
-
-  return (
+  if (!isMounted) return null;
+  return (  
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900">
       {/* Animated background */}
       <div className="absolute inset-0 overflow-hidden">
@@ -105,6 +117,18 @@ const Preloader = memo(function Preloader({ isLoading, onLoadingComplete }: Prel
             />
           )
         })}
+        {Array.from({ length: 20 }).map((_, i) => (
+          <div
+            key={i}
+            className="absolute w-2 h-2 bg-blue-400/30 rounded-full animate-float"
+            style={{
+    left: `${Math.random() * 100}%`,
+    top: `${Math.random() * 100}%`,
+    animationDelay: `${Math.random() * 3}s`,
+    animationDuration: `${3 + Math.random() * 2}s`,
+  }}
+          />
+        ))}
       </div>
 
       {/* Main content */}
@@ -162,7 +186,7 @@ const Preloader = memo(function Preloader({ isLoading, onLoadingComplete }: Prel
         </div>
       </div>
     </div>
-  )
+  );
 })
 
 export default Preloader

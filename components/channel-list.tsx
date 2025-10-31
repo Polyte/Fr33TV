@@ -91,10 +91,10 @@ const ChannelItem = memo(function ChannelItem({
                 {channel.group}
               </Badge>
               {channel.lastChecked && (
-                <span className={`text-xs ${themeClasses.muted}`}>
-                  Checked {channel.lastChecked.toLocaleDateString()}
-                </span>
-              )}
+  <span className={`text-xs ${themeClasses.muted}`}>
+    Checked {new Date(channel.lastChecked).toLocaleDateString()}
+  </span>
+)}
             </div>
           )}
         </div>
