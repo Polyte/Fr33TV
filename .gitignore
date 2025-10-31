@@ -25,3 +25,4 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+app/api/fetch-playlist/tv_channels_823379984214_plus.m3u
